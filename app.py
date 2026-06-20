@@ -1461,7 +1461,10 @@ def extract_fundamental_info(info):
         'Inventory Turnover': inventory_turnover
     }
 
-def compute_fundamental_signals(df, fundamentals):
+def compute_fundamental_signals(df, fundamentals, p=None):
+    if p is None:
+        p = {}
+        
     pe = fundamentals.get('P/E Ratio')
     pb = fundamentals.get('P/B Ratio')
     roe = fundamentals.get('ROE')
@@ -1472,23 +1475,23 @@ def compute_fundamental_signals(df, fundamentals):
     
     pe_sig = np.zeros(n)
     if pe is not None:
-        pe_sig = np.where(pe < 20, 1.0, np.where(pe > 40, -1.0, 0.0))
+        pe_sig = np.where(pe < p.get('pe_low', 20), 1.0, np.where(pe > p.get('pe_high', 40), -1.0, 0.0))
         
     pb_sig = np.zeros(n)
     if pb is not None:
-        pb_sig = np.where(pb < 3, 1.0, np.where(pb > 8, -1.0, 0.0))
+        pb_sig = np.where(pb < p.get('pb_low', 3), 1.0, np.where(pb > p.get('pb_high', 8), -1.0, 0.0))
         
     roe_sig = np.zeros(n)
     if roe is not None:
-        roe_sig = np.where(roe > 0.15, 1.0, np.where(roe < 0.05, -1.0, 0.0))
+        roe_sig = np.where(roe > p.get('roe_high', 0.15), 1.0, np.where(roe < p.get('roe_low', 0.05), -1.0, 0.0))
         
     margin_sig = np.zeros(n)
     if margin is not None:
-        margin_sig = np.where(margin > 0.40, 1.0, np.where(margin < 0.20, -1.0, 0.0))
+        margin_sig = np.where(margin > p.get('margin_high', 0.40), 1.0, np.where(margin < p.get('margin_low', 0.20), -1.0, 0.0))
         
     turnover_sig = np.zeros(n)
     if turnover is not None:
-        turnover_sig = np.where(turnover > 4.0, 1.0, np.where(turnover < 1.5, -1.0, 0.0))
+        turnover_sig = np.where(turnover > p.get('turnover_high', 4.0), 1.0, np.where(turnover < p.get('turnover_low', 1.5), -1.0, 0.0))
         
     return {
         'P/E Ratio': pd.Series(pe_sig, index=df.index),
@@ -1573,8 +1576,8 @@ def calc_all_signals(df, fundamentals, p=None):
     wr_sig, _ = calc_williams_r(df, wr_period, wr_oversold, wr_overbought)
     signals['Williams %R'] = wr_sig
     
-    # Fundamental signals (5 items)
-    fund_sigs = compute_fundamental_signals(df, fundamentals)
+    # 預計算基本面訊號 (會重複 padding 成 series)
+    fund_sigs = compute_fundamental_signals(df, fundamentals, p)
     signals.update(fund_sigs)
     
     return signals
@@ -2187,6 +2190,46 @@ with st.sidebar.expander("🔧 因子參數細部調整", expanded=False):
     else:
         p_wr_period, p_wr_oversold, p_wr_overbought = 14, -80, -20
 
+    # P/E Ratio
+    if "P/E Ratio" in active_tech_factors:
+        st.markdown("**P/E Ratio 參數**")
+        pe_low = st.number_input("P/E 看多上限 (小於此值看多)", value=st.session_state.get('pe_low', 20), step=1, key="pe_low")
+        pe_high = st.number_input("P/E 看空下限 (大於此值看空)", value=st.session_state.get('pe_high', 40), step=1, key="pe_high")
+    else:
+        pe_low, pe_high = 20, 40
+
+    # P/B Ratio
+    if "P/B Ratio" in active_tech_factors:
+        st.markdown("**P/B Ratio 參數**")
+        pb_low = st.number_input("P/B 看多上限 (小於此值看多)", value=float(st.session_state.get('pb_low', 3.0)), step=0.1, key="pb_low")
+        pb_high = st.number_input("P/B 看空下限 (大於此值看空)", value=float(st.session_state.get('pb_high', 8.0)), step=0.1, key="pb_high")
+    else:
+        pb_low, pb_high = 3.0, 8.0
+
+    # ROE
+    if "ROE" in active_tech_factors:
+        st.markdown("**ROE 參數**")
+        roe_high = st.number_input("ROE 看多下限 (大於此值看多)", value=float(st.session_state.get('roe_high', 0.15)), step=0.01, key="roe_high")
+        roe_low = st.number_input("ROE 看空上限 (小於此值看空)", value=float(st.session_state.get('roe_low', 0.05)), step=0.01, key="roe_low")
+    else:
+        roe_high, roe_low = 0.15, 0.05
+
+    # Gross Margin
+    if "Gross Margin" in active_tech_factors:
+        st.markdown("**Gross Margin 參數**")
+        margin_high = st.number_input("毛利率看多下限 (大於此值看多)", value=float(st.session_state.get('margin_high', 0.40)), step=0.01, key="margin_high")
+        margin_low = st.number_input("毛利率看空上限 (小於此值看空)", value=float(st.session_state.get('margin_low', 0.20)), step=0.01, key="margin_low")
+    else:
+        margin_high, margin_low = 0.40, 0.20
+
+    # Inventory Turnover
+    if "Inventory Turnover" in active_tech_factors:
+        st.markdown("**Inventory Turnover 參數**")
+        turnover_high = st.number_input("存貨週轉率看多下限 (大於此值看多)", value=float(st.session_state.get('turnover_high', 4.0)), step=0.1, key="turnover_high")
+        turnover_low = st.number_input("存貨週轉率看空上限 (小於此值看空)", value=float(st.session_state.get('turnover_low', 1.5)), step=0.1, key="turnover_low")
+    else:
+        turnover_high, turnover_low = 4.0, 1.5
+
 # 建立參數包傳入計算函數
 indicator_params = {
     'ma_fast': p_ma_fast, 'ma_slow': p_ma_slow,
@@ -2198,7 +2241,12 @@ indicator_params = {
     'adx_period': p_adx_period, 'adx_threshold': p_adx_threshold,
     'cci_period': p_cci_period, 'cci_oversold': p_cci_oversold, 'cci_overbought': p_cci_overbought,
     'obv_ema_period': p_obv_ema_period,
-    'wr_period': p_wr_period, 'wr_oversold': p_wr_oversold, 'wr_overbought': p_wr_overbought
+    'wr_period': p_wr_period, 'wr_oversold': p_wr_oversold, 'wr_overbought': p_wr_overbought,
+    'pe_low': pe_low, 'pe_high': pe_high,
+    'pb_low': pb_low, 'pb_high': pb_high,
+    'roe_high': roe_high, 'roe_low': roe_low,
+    'margin_high': margin_high, 'margin_low': margin_low,
+    'turnover_high': turnover_high, 'turnover_low': turnover_low
 }
 
 # ==========================================
@@ -2371,6 +2419,11 @@ if err:
 
 # 提取基本面
 fundamentals = extract_fundamental_info(info)
+
+# 檢查缺失基本面數值
+missing_fundamentals = [k for k, v in fundamentals.items() if v is None or pd.isna(v)]
+if missing_fundamentals:
+    st.warning(f"⚠️ 網路資料抓取不齊全，下列基本面數值缺失，對應的因子判定將不受影響： {', '.join(missing_fundamentals)}")
 
 # 模擬計算與資料準備
 if df is not None:
@@ -2576,7 +2629,7 @@ with tab1:
     with kpi_col2:
         render_kpi_card(
             title="策略淨收益 (金額)",
-            value=f"${net_pnl_amt:,.2f}",
+            value=f"${int(net_pnl_amt):,}",
             delta_str=f"初始資金 ${initial_cap:,.0f}",
             is_positive=net_pnl_amt >= 0
         )
