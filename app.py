@@ -35,6 +35,11 @@ if 'loaded_params' in st.session_state:
         for factor_name, weight_val in params['weights'].items():
             st.session_state[f"w_{factor_name}"] = weight_val
             
+    # 載入詳細因子參數
+    if 'ind_params' in params:
+        for pk, pv in params['ind_params'].items():
+            st.session_state[pk] = pv
+            
     # 清除暫存資料
     del st.session_state.loaded_params
 
@@ -118,26 +123,26 @@ st.markdown("""
 # ==========================================
 # 2. 技術指標核心算法 (向量化 Pandas 運算)
 # ==========================================
-def calc_ma_cross(df):
-    sma20 = df['Close'].rolling(window=20).mean()
-    sma60 = df['Close'].rolling(window=60).mean()
-    signal = np.where(sma20 > sma60, 1.0, -1.0)
-    signal[sma60.isna()] = 0.0
-    return pd.Series(signal, index=df.index), sma20, sma60
+def calc_ma_cross(df, fast=20, slow=60):
+    sma_fast = df['Close'].rolling(window=fast).mean()
+    sma_slow = df['Close'].rolling(window=slow).mean()
+    signal = np.where(sma_fast > sma_slow, 1.0, -1.0)
+    signal[sma_slow.isna()] = 0.0
+    return pd.Series(signal, index=df.index), sma_fast, sma_slow
 
-def calc_rsi(df, period=14):
+def calc_rsi(df, period=14, oversold=30, overbought=70):
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
     rs = gain / np.where(loss == 0, 1e-10, loss)
     rsi = 100 - (100 / (1 + rs))
     signal = np.zeros(len(df))
-    signal[rsi < 30] = 1.0
-    signal[rsi > 70] = -1.0
+    signal[rsi < oversold] = 1.0
+    signal[rsi > overbought] = -1.0
     signal[rsi.isna()] = 0.0
     return pd.Series(signal, index=df.index), rsi
 
-def calc_kd(df, k_period=14, d_period=3):
+def calc_kd(df, k_period=14, d_period=3, oversold=20, overbought=80):
     low_min = df['Low'].rolling(window=k_period).min()
     high_max = df['High'].rolling(window=k_period).max()
     rsv = 100 * (df['Close'] - low_min) / np.where(high_max - low_min == 0, 1e-10, high_max - low_min)
@@ -146,8 +151,8 @@ def calc_kd(df, k_period=14, d_period=3):
     signal = np.zeros(len(df))
     prev_k = k_val.shift(1)
     prev_d = d_val.shift(1)
-    buy_cond = (k_val > d_val) & (prev_k <= prev_d) & (k_val < 20)
-    sell_cond = (k_val < d_val) & (prev_k >= prev_d) & (k_val > 80)
+    buy_cond = (k_val > d_val) & (prev_k <= prev_d) & (k_val < oversold)
+    sell_cond = (k_val < d_val) & (prev_k >= prev_d) & (k_val > overbought)
     signal[buy_cond] = 1.0
     signal[sell_cond] = -1.0
     signal[k_val.isna() | d_val.isna()] = 0.0
@@ -191,7 +196,7 @@ def calc_atr(df, period=14):
     signal[atr.isna() | atr_sma.isna()] = 0.0
     return pd.Series(signal, index=df.index), atr
 
-def calc_adx(df, period=14):
+def calc_adx(df, period=14, threshold=25):
     up_move = df['High'] - df['High'].shift(1)
     down_move = df['Low'].shift(1) - df['Low']
     plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
@@ -209,14 +214,14 @@ def calc_adx(df, period=14):
     dx = 100 * (plus_di - minus_di).abs() / np.where((plus_di + minus_di) == 0, 1e-10, plus_di + minus_di)
     adx = dx.rolling(window=period).mean()
     signal = np.zeros(len(df))
-    buy_cond = (adx > 25) & (plus_di > minus_di)
-    sell_cond = (adx > 25) & (minus_di > plus_di)
+    buy_cond = (adx > threshold) & (plus_di > minus_di)
+    sell_cond = (adx > threshold) & (minus_di > plus_di)
     signal[buy_cond] = 1.0
     signal[sell_cond] = -1.0
     signal[adx.isna()] = 0.0
     return pd.Series(signal, index=df.index), adx
 
-def calc_cci(df, period=20):
+def calc_cci(df, period=20, oversold=-100, overbought=100):
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     sma_tp = tp.rolling(window=period).mean()
     def mean_deviation(x):
@@ -224,12 +229,12 @@ def calc_cci(df, period=20):
     mad = tp.rolling(window=period).apply(mean_deviation, raw=True)
     cci = (tp - sma_tp) / (0.015 * np.where(mad == 0, 1e-10, mad))
     signal = np.zeros(len(df))
-    signal[cci < -100] = 1.0
-    signal[cci > 100] = -1.0
+    signal[cci < oversold] = 1.0
+    signal[cci > overbought] = -1.0
     signal[cci.isna()] = 0.0
     return pd.Series(signal, index=df.index), cci
 
-def calc_obv(df):
+def calc_obv(df, ema_period=20):
     vol = df['Volume']
     close_diff = df['Close'].diff()
     sign = np.zeros(len(df))
@@ -237,18 +242,18 @@ def calc_obv(df):
     sign[close_diff < 0] = -1.0
     obv_change = sign * vol
     obv = obv_change.cumsum()
-    obv_ema = obv.ewm(span=20, adjust=False).mean()
+    obv_ema = obv.ewm(span=ema_period, adjust=False).mean()
     signal = np.where(obv > obv_ema, 1.0, -1.0)
     signal[obv.isna() | obv_ema.isna()] = 0.0
     return pd.Series(signal, index=df.index), obv, obv_ema
 
-def calc_williams_r(df, period=14):
+def calc_williams_r(df, period=14, oversold=-80, overbought=-20):
     high_max = df['High'].rolling(window=period).max()
     low_min = df['Low'].rolling(window=period).min()
     williams = -100 * (high_max - df['Close']) / np.where(high_max - low_min == 0, 1e-10, high_max - low_min)
     signal = np.zeros(len(df))
-    signal[williams < -80] = 1.0
-    signal[williams > -20] = -1.0
+    signal[williams < oversold] = 1.0
+    signal[williams > overbought] = -1.0
     signal[williams.isna()] = 0.0
     return pd.Series(signal, index=df.index), williams
 
@@ -312,47 +317,76 @@ def compute_fundamental_signals(df, fundamentals):
 # ==========================================
 # 4. 回測引擎與指標計算
 # ==========================================
-def calc_all_signals(df, fundamentals):
+def calc_all_signals(df, fundamentals, p=None):
+    if p is None:
+        p = {}
+        
+    # 提取參數，若無設定則使用預設值
+    ma_fast = p.get('ma_fast', 20)
+    ma_slow = p.get('ma_slow', 60)
+    rsi_period = p.get('rsi_period', 14)
+    rsi_oversold = p.get('rsi_oversold', 30)
+    rsi_overbought = p.get('rsi_overbought', 70)
+    kd_period = p.get('kd_period', 14)
+    kd_d = p.get('kd_d', 3)
+    kd_oversold = p.get('kd_oversold', 20)
+    kd_overbought = p.get('kd_overbought', 80)
+    macd_fast = p.get('macd_fast', 12)
+    macd_slow = p.get('macd_slow', 26)
+    macd_signal = p.get('macd_signal', 9)
+    bb_period = p.get('bb_period', 20)
+    bb_std = p.get('bb_std', 2.0)
+    atr_period = p.get('atr_period', 14)
+    adx_period = p.get('adx_period', 14)
+    adx_threshold = p.get('adx_threshold', 25)
+    cci_period = p.get('cci_period', 20)
+    cci_oversold = p.get('cci_oversold', -100)
+    cci_overbought = p.get('cci_overbought', 100)
+    obv_ema_period = p.get('obv_ema_period', 20)
+    wr_period = p.get('wr_period', 14)
+    wr_oversold = p.get('wr_oversold', -80)
+    wr_overbought = p.get('wr_overbought', -20)
+
     signals = {}
     
     # 1. MA Cross
-    ma_sig, _, _ = calc_ma_cross(df)
+    ma_sig, _, _ = calc_ma_cross(df, ma_fast, ma_slow)
     signals['MA Cross'] = ma_sig
     
     # 2. RSI
-    rsi_sig, _ = calc_rsi(df)
+    rsi_sig, _ = calc_rsi(df, rsi_period, rsi_oversold, rsi_overbought)
     signals['RSI'] = rsi_sig
     
     # 3. KD
-    kd_sig, _, _ = calc_kd(df)
+    kd_sig, _, _ = calc_kd(df, kd_period, kd_d, kd_oversold, kd_overbought)
     signals['Stochastic KD'] = kd_sig
     
     # 4. MACD
-    macd_sig, _, _, _ = calc_macd(df)
+    macd_sig, _, _, _ = calc_macd(df, macd_fast, macd_slow, macd_signal)
     signals['MACD'] = macd_sig
     
     # 5. BBands
-    bb_sig, _, _, _ = calc_bbands(df)
+    bb_sig, _, _, _ = calc_bbands(df, bb_period, bb_std)
     signals['Bollinger Bands'] = bb_sig
     
     # 6. ATR
-    atr_sig, _ = calc_atr(df)
+    atr_sig, _ = calc_atr(df, atr_period)
     signals['ATR Trend'] = atr_sig
     
     # 7. ADX
-    adx_sig, _ = calc_adx(df)
+    adx_sig, _ = calc_adx(df, adx_period, adx_threshold)
     signals['ADX'] = adx_sig
     
     # 8. CCI
-    cci_sig, _ = calc_cci(df)
+    cci_sig, _ = calc_cci(df, cci_period, cci_oversold, cci_overbought)
     signals['CCI'] = cci_sig
     
     # 9. OBV
-    obv_sig, _, _ = calc_obv(df)
+    obv_sig, _, _ = calc_obv(df, obv_ema_period)
     signals['OBV'] = obv_sig
     
     # 10. Williams %R
-    wr_sig, _ = calc_williams_r(df)
+    wr_sig, _ = calc_williams_r(df, wr_period, wr_oversold, wr_overbought)
     signals['Williams %R'] = wr_sig
     
     # Fundamental signals (5 items)
@@ -647,6 +681,114 @@ else:
         def_w = st.session_state.get(f"w_{f}", 20 if f in ["MA Cross", "RSI", "MACD"] else 0)
         weights[f] = st.sidebar.slider(f, min_value=0, max_value=100, value=def_w, step=5, key=f"w_{f}")
 
+# ==========================================
+# 7.2. 因子參數細部調整 (側邊欄摺疊區)
+# ==========================================
+with st.sidebar.expander("🔧 因子參數細部調整", expanded=False):
+    active_tech_factors = []
+    if mode == "單一因子":
+        active_tech_factors = [single_factor]
+    else:
+        active_tech_factors = [f for f in factors_list if weights[f] > 0]
+        
+    # MA Cross
+    if "MA Cross" in active_tech_factors:
+        st.markdown("**MA Cross 參數**")
+        p_ma_fast = st.slider("Fast SMA 週期", 5, 50, value=st.session_state.get('p_ma_fast', 20), key="p_ma_fast")
+        p_ma_slow = st.slider("Slow SMA 週期", 30, 200, value=st.session_state.get('p_ma_slow', 60), key="p_ma_slow")
+    else:
+        p_ma_fast, p_ma_slow = 20, 60
+        
+    # RSI
+    if "RSI" in active_tech_factors:
+        st.markdown("**RSI 參數**")
+        p_rsi_period = st.slider("RSI 計算週期", 5, 30, value=st.session_state.get('p_rsi_period', 14), key="p_rsi_period")
+        p_rsi_oversold = st.slider("RSI 買入超賣界線", 10, 45, value=st.session_state.get('p_rsi_oversold', 30), key="p_rsi_oversold")
+        p_rsi_overbought = st.slider("RSI 賣出超買界線", 55, 90, value=st.session_state.get('p_rsi_overbought', 70), key="p_rsi_overbought")
+    else:
+        p_rsi_period, p_rsi_oversold, p_rsi_overbought = 14, 30, 70
+        
+    # Stochastic KD
+    if "Stochastic KD" in active_tech_factors:
+        st.markdown("**Stochastic KD 參數**")
+        p_kd_period = st.slider("KD 計算週期", 5, 30, value=st.session_state.get('p_kd_period', 14), key="p_kd_period")
+        p_kd_d = st.slider("D 線平滑週期", 2, 10, value=st.session_state.get('p_kd_d', 3), key="p_kd_d")
+        p_kd_oversold = st.slider("KD 買入界線 (%K <)", 5, 40, value=st.session_state.get('p_kd_oversold', 20), key="p_kd_oversold")
+        p_kd_overbought = st.slider("KD 賣出界線 (%K >)", 60, 95, value=st.session_state.get('p_kd_overbought', 80), key="p_kd_overbought")
+    else:
+        p_kd_period, p_kd_d, p_kd_oversold, p_kd_overbought = 14, 3, 20, 80
+        
+    # MACD
+    if "MACD" in active_tech_factors:
+        st.markdown("**MACD 參數**")
+        p_macd_fast = st.slider("快線 EMA 週期", 5, 25, value=st.session_state.get('p_macd_fast', 12), key="p_macd_fast")
+        p_macd_slow = st.slider("慢線 EMA 週期", 20, 60, value=st.session_state.get('p_macd_slow', 26), key="p_macd_slow")
+        p_macd_signal = st.slider("訊號線 MACD EMA 週期", 5, 15, value=st.session_state.get('p_macd_signal', 9), key="p_macd_signal")
+    else:
+        p_macd_fast, p_macd_slow, p_macd_signal = 12, 26, 9
+        
+    # Bollinger Bands
+    if "Bollinger Bands" in active_tech_factors:
+        st.markdown("**Bollinger Bands 參數**")
+        p_bb_period = st.slider("BBands 計算週期", 10, 50, value=st.session_state.get('p_bb_period', 20), key="p_bb_period")
+        p_bb_std = st.slider("標準差倍數", 1.0, 3.0, value=float(st.session_state.get('p_bb_std', 2.0)), step=0.1, key="p_bb_std")
+    else:
+        p_bb_period, p_bb_std = 20, 2.0
+        
+    # ATR Trend
+    if "ATR Trend" in active_tech_factors:
+        st.markdown("**ATR Trend 參數**")
+        p_atr_period = st.slider("ATR 計算週期", 5, 30, value=st.session_state.get('p_atr_period', 14), key="p_atr_period")
+    else:
+        p_atr_period = 14
+        
+    # ADX
+    if "ADX" in active_tech_factors:
+        st.markdown("**ADX 參數**")
+        p_adx_period = st.slider("ADX 計算週期", 5, 30, value=st.session_state.get('p_adx_period', 14), key="p_adx_period")
+        p_adx_threshold = st.slider("ADX 趨勢強度門檻", 15, 40, value=st.session_state.get('p_adx_threshold', 25), key="p_adx_threshold")
+    else:
+        p_adx_period, p_adx_threshold = 14, 25
+        
+    # CCI
+    if "CCI" in active_tech_factors:
+        st.markdown("**CCI 參數**")
+        p_cci_period = st.slider("CCI 計算週期", 10, 50, value=st.session_state.get('p_cci_period', 20), key="p_cci_period")
+        p_cci_oversold = st.slider("CCI 買入超賣界線", -200, -50, value=st.session_state.get('p_cci_oversold', -100), step=10, key="p_cci_oversold")
+        p_cci_overbought = st.slider("CCI 賣出超買界線", 50, 200, value=st.session_state.get('p_cci_overbought', 100), step=10, key="p_cci_overbought")
+    else:
+        p_cci_period, p_cci_oversold, p_cci_overbought = 20, -100, 100
+        
+    # OBV
+    if "OBV" in active_tech_factors:
+        st.markdown("**OBV 參數**")
+        p_obv_ema_period = st.slider("OBV 平滑 EMA 週期", 5, 50, value=st.session_state.get('p_obv_ema_period', 20), key="p_obv_ema_period")
+    else:
+        p_obv_ema_period = 20
+        
+    # Williams %R
+    if "Williams %R" in active_tech_factors:
+        st.markdown("**Williams %R 參數**")
+        p_wr_period = st.slider("Williams %R 週期", 5, 30, value=st.session_state.get('p_wr_period', 14), key="p_wr_period")
+        p_wr_oversold = st.slider("Williams %R 買入超賣界線", -95, -60, value=st.session_state.get('p_wr_oversold', -80), step=5, key="p_wr_oversold")
+        p_wr_overbought = st.slider("Williams %R 賣出超買界線", -40, -5, value=st.session_state.get('p_wr_overbought', -20), step=5, key="p_wr_overbought")
+    else:
+        p_wr_period, p_wr_oversold, p_wr_overbought = 14, -80, -20
+
+# 建立參數包傳入計算函數
+indicator_params = {
+    'ma_fast': p_ma_fast, 'ma_slow': p_ma_slow,
+    'rsi_period': p_rsi_period, 'rsi_oversold': p_rsi_oversold, 'rsi_overbought': p_rsi_overbought,
+    'kd_period': p_kd_period, 'kd_d': p_kd_d, 'kd_oversold': p_kd_oversold, 'kd_overbought': p_kd_overbought,
+    'macd_fast': p_macd_fast, 'macd_slow': p_macd_slow, 'macd_signal': p_macd_signal,
+    'bb_period': p_bb_period, 'bb_std': p_bb_std,
+    'atr_period': p_atr_period,
+    'adx_period': p_adx_period, 'adx_threshold': p_adx_threshold,
+    'cci_period': p_cci_period, 'cci_oversold': p_cci_oversold, 'cci_overbought': p_cci_overbought,
+    'obv_ema_period': p_obv_ema_period,
+    'wr_period': p_wr_period, 'wr_oversold': p_wr_oversold, 'wr_overbought': p_wr_overbought
+}
+
 # 下載資料
 with st.spinner("獲取 yfinance 歷史數據與基本面..."):
     df, info, err = fetch_stock_data(ticker, start_date, end_date)
@@ -666,7 +808,7 @@ fundamentals = extract_fundamental_info(info)
 
 # 模擬計算與資料準備
 if df is not None:
-    signals_dict = calc_all_signals(df, fundamentals)
+    signals_dict = calc_all_signals(df, fundamentals, p=indicator_params)
     
     if mode == "單一因子":
         # 單一因子直接映射為 position (1 或 0)
@@ -727,7 +869,19 @@ if df is not None:
                 'cost': cost_percent,
                 'single_factor': single_factor,
                 'threshold': threshold,
-                'weights': weights.copy()
+                'weights': weights.copy(),
+                'ind_params': {
+                    'p_ma_fast': p_ma_fast, 'p_ma_slow': p_ma_slow,
+                    'p_rsi_period': p_rsi_period, 'p_rsi_oversold': p_rsi_oversold, 'p_rsi_overbought': p_rsi_overbought,
+                    'p_kd_period': p_kd_period, 'p_kd_d': p_kd_d, 'p_kd_oversold': p_kd_oversold, 'p_kd_overbought': p_kd_overbought,
+                    'p_macd_fast': p_macd_fast, 'p_macd_slow': p_macd_slow, 'p_macd_signal': p_macd_signal,
+                    'p_bb_period': p_bb_period, 'p_bb_std': p_bb_std,
+                    'p_atr_period': p_atr_period,
+                    'p_adx_period': p_adx_period, 'p_adx_threshold': p_adx_threshold,
+                    'p_cci_period': p_cci_period, 'p_cci_oversold': p_cci_oversold, 'p_cci_overbought': p_cci_overbought,
+                    'p_obv_ema_period': p_obv_ema_period,
+                    'p_wr_period': p_wr_period, 'p_wr_oversold': p_wr_oversold, 'p_wr_overbought': p_wr_overbought
+                }
             },
             'metrics': metrics,
             'equity_curve': res['equity_curve'].tolist(),
@@ -791,6 +945,44 @@ with tab1:
         c3.metric("ROE (股東權益報酬率)", roe_f, roe_score)
         c4.metric("Gross Margin (毛利率)", gm_f, gm_score)
         c5.metric("Inventory Turnover (週轉率)", it_f, it_score)
+
+    # 策略決策規則描述
+    st.markdown("### 📝 當前策略決策規則")
+    if mode == "單一因子":
+        if single_factor == "MA Cross":
+            desc = f"當短期均線 SMA({p_ma_fast}) 向上突破長期均線 SMA({p_ma_slow}) 時買入做多；向下跌破時平倉出局。"
+        elif single_factor == "RSI":
+            desc = f"當 RSI({p_rsi_period}) 跌破超賣界線 {p_rsi_oversold} 時買入做多（超賣反彈）；漲破超買界線 {p_rsi_overbought} 時平倉出局（超買回檔）。"
+        elif single_factor == "Stochastic KD":
+            desc = f"當 KD指標 %K線 跌破超賣界線 {p_kd_oversold} 且向上金叉 %D線(平滑週期 {p_kd_d}) 時買入做多；在超買界線 > {p_kd_overbought} 且死叉時平倉出局。"
+        elif single_factor == "MACD":
+            desc = f"當 MACD柱狀圖 (快線:{p_macd_fast}, 慢線:{p_macd_slow}, 訊號線:{p_macd_signal}) 翻正 (> 0) 時買入做多；翻負 (< 0) 時平倉出局。"
+        elif single_factor == "Bollinger Bands":
+            desc = f"當股價跌破布林通道下軌 (週期:{p_bb_period}, 標準差:{p_bb_std}) 時買入做多；漲破布林通道上軌時平倉出局。"
+        elif single_factor == "ATR Trend":
+            desc = f"當股價大於 20日EMA 且 ATR({p_atr_period}) 呈擴張狀態時，判定為波動度上升之順勢行情買入做多；當股價低於 20日EMA 且 ATR 擴張時平倉出局。"
+        elif single_factor == "ADX":
+            desc = f"當 ADX({p_adx_period}) 大於趨勢強度門檻 {p_adx_threshold} 且 +DI > -DI 時買入做多；當 -DI > +DI 時平倉出局。"
+        elif single_factor == "CCI":
+            desc = f"當 CCI({p_cci_period}) 跌破超賣界線 {p_cci_oversold} 時買入做多；漲破超買界線 {p_cci_overbought} 時平倉出局。"
+        elif single_factor == "OBV":
+            desc = f"當 OBV 指標大於其 OBV_EMA({p_obv_ema_period}) 時（資金量能向上積聚）買入做多；低於 EMA 時平倉出局。"
+        elif single_factor == "Williams %R":
+            desc = f"當威廉指標 %R({p_wr_period}) 跌破超賣界線 {p_wr_oversold} 時買入做多；漲破超買界線 {p_wr_overbought} 時平倉出局。"
+        else:
+            # Fundamentals
+            score_map = {
+                "P/E Ratio": f"當 P/E 本益比 < 20 時看多，本益比 > 40 時看空，其餘中性。",
+                "P/B Ratio": f"當 P/B 股價淨值比 < 3 時看多，股價淨值比 > 8 時看空，其餘中性。",
+                "ROE": f"當 ROE 股東權益報酬率 > 15% 時看多，ROE < 5% 時看空，其餘中性。",
+                "Gross Margin": f"當 Gross Margin 毛利率 > 40% 時看多，毛利率 < 20% 時看空，其餘中性。",
+                "Inventory Turnover": f"當 Inventory Turnover 存貨週轉率 > 4.0 時看多，存貨週轉率 < 1.5 時看空，其餘中性。"
+            }
+            desc = score_map.get(single_factor, "基本面因子篩選看多/看空。")
+            
+        st.info(f"**【{strategy_name}】** {desc}")
+    else:
+        st.info(f"**【複合權重策略】** 綜合選定之多個技術與基本面因子，以加權分數形式（-1.0 ~ 1.0）計算。當複合訊號值大於交易門檻 {threshold} 時買入做多，小於 -{threshold} 時平倉出局。")
 
     # KPI 區塊
     st.markdown("### 🏆 當前回測結果 KPI")
