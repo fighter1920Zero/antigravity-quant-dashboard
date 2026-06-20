@@ -638,9 +638,11 @@ st.sidebar.title("🧪 Quant Simulation Lab")
 st.sidebar.write("調整參數並管理已儲存的量化模擬實驗。")
 
 # 設定載入 session_state 的預設值
+_today = datetime.date.today()
+_default_start = datetime.date(_today.year - 3, 1, 1)
 def_ticker = st.session_state.get('ticker', '2330.TW')
-def_start = st.session_state.get('start_date', datetime.date(2021, 1, 1))
-def_end = st.session_state.get('end_date', datetime.date(2025, 1, 1))
+def_start = st.session_state.get('start_date', _default_start)
+def_end = st.session_state.get('end_date', _today)
 def_mode = st.session_state.get('mode', '單一因子')
 def_cost = st.session_state.get('cost', 0.15) / 100.0
 
@@ -668,9 +670,9 @@ weights = {}
 threshold = 0.1
 
 if mode == "單一因子":
-    def_single = st.session_state.get('single_factor', 'MA Cross')
+    def_single = st.session_state.get('single_factor', 'RSI')
     if def_single not in factors_list:
-        def_single = 'MA Cross'
+        def_single = 'RSI'
     single_factor = st.sidebar.selectbox("選擇交易因子", factors_list, index=factors_list.index(def_single), key="single_factor")
 else:
     def_thresh = st.session_state.get('threshold', 0.1)
@@ -788,6 +790,124 @@ indicator_params = {
     'obv_ema_period': p_obv_ema_period,
     'wr_period': p_wr_period, 'wr_oversold': p_wr_oversold, 'wr_overbought': p_wr_overbought
 }
+
+# ==========================================
+# 7.3 自動最佳參數引擎 (Grid Search)
+# ==========================================
+def run_grid_search(df, factor_name):
+    """For a given factor, sweep parameter grid and return best params by cumulative return."""
+    grids = {
+        "MA Cross": [{"ma_fast": f, "ma_slow": s} for f in [10, 15, 20, 25] for s in [40, 50, 60, 80] if s > f + 10],
+        "RSI": [{"rsi_period": p, "rsi_oversold": o, "rsi_overbought": ob}
+                for p in [7, 14, 21] for o in [20, 25, 30, 35] for ob in [65, 70, 75, 80]],
+        "Stochastic KD": [{"kd_period": p, "kd_oversold": o, "kd_overbought": ob}
+                          for p in [9, 14, 21] for o in [15, 20, 25] for ob in [75, 80, 85]],
+        "MACD": [{"macd_fast": f, "macd_slow": s, "macd_signal": sig}
+                 for f in [8, 12] for s in [21, 26] for sig in [7, 9]],
+        "Bollinger Bands": [{"bb_period": p, "bb_std": sd}
+                            for p in [15, 20, 25] for sd in [1.5, 2.0, 2.5]],
+        "ATR Trend": [{"atr_period": p} for p in [10, 14, 18]],
+        "ADX": [{"adx_period": p, "adx_threshold": t}
+                for p in [10, 14] for t in [20, 25, 30]],
+        "CCI": [{"cci_period": p, "cci_oversold": o, "cci_overbought": ob}
+                for p in [14, 20] for o in [-120, -100, -80] for ob in [80, 100, 120]],
+        "OBV": [{"obv_ema_period": p} for p in [10, 15, 20, 30]],
+        "Williams %R": [{"wr_period": p, "wr_oversold": o, "wr_overbought": ob}
+                        for p in [10, 14] for o in [-85, -80, -75] for ob in [-25, -20, -15]],
+    }
+    if factor_name not in grids:
+        return {}   # Fundamental factors - no grid search
+
+    best_params = {}
+    best_return = -999.0
+    fundamentals_dummy = {k: None for k in ['P/E Ratio','P/B Ratio','ROE','Gross Margin','Inventory Turnover']}
+
+    for param_combo in grids[factor_name]:
+        p = param_combo.copy()
+        try:
+            sigs = calc_all_signals(df, fundamentals_dummy, p=p)
+            raw = sigs[factor_name]
+            pos = []
+            curr = 0
+            for v in raw:
+                if v == 1.0: curr = 1
+                elif v == -1.0: curr = 0
+                pos.append(curr)
+            pos_series = pd.Series(pos, index=df.index)
+            result = run_backtest(df, pos_series, transaction_fee=0.0015)
+            ret = result['metrics']['total_return']
+            if ret > best_return:
+                best_return = ret
+                best_params = p
+        except Exception:
+            continue
+
+    return best_params
+
+def build_trade_log(df, positions, indicator_series, factor_name):
+    """Build a detailed trade log DataFrame with buy/sell date, price, indicator value, PnL."""
+    pos_diff = positions.diff().fillna(0)
+    buys = pos_diff[pos_diff == 1].index
+    sells = pos_diff[pos_diff == -1].index
+    close = df['Close']
+
+    rows = []
+    for i, buy_date in enumerate(buys):
+        future_sells = sells[sells > buy_date]
+        sell_date = future_sells[0] if not future_sells.empty else close.index[-1]
+        buy_price = float(close.loc[buy_date])
+        sell_price = float(close.loc[sell_date])
+        pnl = (sell_price - buy_price) / buy_price * 100
+        ind_buy = float(indicator_series.loc[buy_date]) if buy_date in indicator_series.index else float('nan')
+        ind_sell = float(indicator_series.loc[sell_date]) if sell_date in indicator_series.index else float('nan')
+        rows.append({
+            "#": i + 1,
+            "買入日期": buy_date.strftime("%Y-%m-%d"),
+            "買入股價": f"{buy_price:.2f}",
+            f"買入時{factor_name}値": f"{ind_buy:.2f}",
+            "賣出日期": sell_date.strftime("%Y-%m-%d"),
+            "賣出股價": f"{sell_price:.2f}",
+            f"賣出時{factor_name}値": f"{ind_sell:.2f}",
+            "單筆損益 (%)": f"{pnl:+.2f}%"
+        })
+    return pd.DataFrame(rows)
+
+@st.cache_data(ttl=3600)
+def fetch_peer_stock_data(ticker_list, start_date, end_date):
+    """Download OHLCV for a basket of peer stocks."""
+    results = {}
+    for t in ticker_list:
+        try:
+            df_peer = yf.download(t, start=start_date, end=end_date, progress=False)
+            if df_peer.empty:
+                continue
+            if isinstance(df_peer.columns, pd.MultiIndex):
+                df_peer.columns = [col[0] for col in df_peer.columns]
+            results[t] = df_peer.sort_index()
+        except Exception:
+            continue
+    return results
+
+# 對於單一因子模式，自動執行最佳參數網格搜尋
+if mode == "單一因子" and single_factor not in ["P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"]:
+    # 編製缓存鍵値：個股+日期+因子組合沒變化就不重跡運算
+    opt_key = f"opt_{ticker}_{start_date}_{end_date}_{single_factor}"
+    if opt_key not in st.session_state:
+        with st.spinner(f"正在對 {single_factor} 執行最佳參數搜尋，請稍候..."):
+            # 第一次要下載資料來做 grid search
+            tmp_df, _, _ = fetch_stock_data(ticker, start_date, end_date)
+            if tmp_df is not None:
+                best = run_grid_search(tmp_df, single_factor)
+                st.session_state[opt_key] = best
+            else:
+                st.session_state[opt_key] = {}
+
+    best_params = st.session_state.get(opt_key, {})
+    # 將最佳參數回填到 session_state（下一次 rerun 會自動載入滑桿）
+    for k, v in best_params.items():
+        sess_key = f"p_{k}"
+        if sess_key not in st.session_state:
+            st.session_state[sess_key] = v
 
 # 下載資料
 with st.spinner("獲取 yfinance 歷史數據與基本面..."):
@@ -912,7 +1032,7 @@ else:
 # ==========================================
 # 9. 主要 Tabs 分頁與繪圖
 # ==========================================
-tab1, tab2 = st.tabs(["📊 單一回測分析", "⚖️ 策略比對對照"])
+tab1, tab2, tab3 = st.tabs(["📊 單一回測分析", "⚖️ 策略比對對照", "🔍 參數最佳化與同業比對"])
 
 # ----------------- Tab 1: 單一回測 -----------------
 with tab1:
@@ -1058,6 +1178,48 @@ with tab1:
     # 圖表 3: 月損益長條圖
     st.plotly_chart(plot_monthly_returns(res['net_returns']), use_container_width=True)
 
+    # 買賣導明明細表
+    if mode == "單一因子" and single_factor not in ["P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"]:
+        with st.expander("📋 最佳參數之實際交易明細", expanded=True):
+            # 取得用於交易日誌的指標專屬數列
+            ind_series = None
+            if single_factor == "RSI":
+                _, ind_series = calc_rsi(df, p_rsi_period, p_rsi_oversold, p_rsi_overbought)
+            elif single_factor == "MA Cross":
+                _, ind_series, _ = calc_ma_cross(df, p_ma_fast, p_ma_slow)
+            elif single_factor == "Stochastic KD":
+                _, ind_series, _ = calc_kd(df, p_kd_period, p_kd_d, p_kd_oversold, p_kd_overbought)
+            elif single_factor == "MACD":
+                _, _, _, ind_series = calc_macd(df, p_macd_fast, p_macd_slow, p_macd_signal)
+            elif single_factor == "Bollinger Bands":
+                _, _, ind_series, _ = calc_bbands(df, p_bb_period, p_bb_std)
+            elif single_factor == "ATR Trend":
+                _, ind_series = calc_atr(df, p_atr_period)
+            elif single_factor == "ADX":
+                _, ind_series = calc_adx(df, p_adx_period, p_adx_threshold)
+            elif single_factor == "CCI":
+                _, ind_series = calc_cci(df, p_cci_period, p_cci_oversold, p_cci_overbought)
+            elif single_factor == "OBV":
+                _, ind_series, _ = calc_obv(df, p_obv_ema_period)
+            elif single_factor == "Williams %R":
+                _, ind_series = calc_williams_r(df, p_wr_period, p_wr_oversold, p_wr_overbought)
+
+            delayed_pos = res['positions']
+
+            if ind_series is not None:
+                trade_log = build_trade_log(df, delayed_pos, ind_series, single_factor)
+                if trade_log.empty:
+                    st.info("在設定的日期區間內，此因子組合沒有產生交易訊號。")
+                else:
+                    # 紙表色彩標註
+                    def color_pnl(val):
+                        try:
+                            return 'color: #00e676' if float(str(val).replace('%','').replace('+','')) > 0 else 'color: #ff1744'
+                        except:
+                            return ''
+                    styled = trade_log.set_index("#").style.map(color_pnl, subset=["單筆損益 (%)"])
+                    st.dataframe(styled, use_container_width=True)
+
 # ----------------- Tab 2: 策略比對 -----------------
 with tab2:
     st.markdown("### ⚖️ 多因子策略對照實驗室")
@@ -1133,3 +1295,95 @@ with tab2:
             st.table(pd.DataFrame(compare_data).set_index("模擬名稱"))
         else:
             st.info("請在上方下拉選單中勾選至少一個模擬策略以顯示對照圖。")
+
+# ----------------- Tab 3: 參數最佳化與同業比對 -----------------
+with tab3:
+    st.markdown("### 🔍 參數最佳化與同業比對")
+
+    if mode != "單一因子" or single_factor in ["P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"]:
+        st.warning("此功能僅支持「單一因子」模式中的技術面因子，請將回測模式切換到「單一因子」且選擇一個技術因子。")
+    elif df is None:
+        st.error("請先成功載入主要標的資料。")
+    else:
+        # 辨識台股 vs 美股
+        is_taiwan = ticker.upper().endswith('.TW') or ticker.upper().endswith('.TWO')
+        if is_taiwan:
+            default_peers = ['2330.TW', '2454.TW', '2303.TW', '3711.TW', '5347.TWO']
+            market_label = "台股半導體同業"
+        else:
+            default_peers = ['TSM', 'NVDA', 'AMD', 'ASML', 'INTC']
+            market_label = "美股半導體同業"
+
+        st.markdown(f"#### {market_label} 策略適用性比對")
+        st.write(f"目前使用的因子：**{single_factor}**，將以最佳參數對 {market_label} 個股進行回測比對。")
+
+        peer_input = st.text_input("同業比對清單（逗號分隔）", value=",".join(default_peers))
+        peer_list = [t.strip() for t in peer_input.split(",") if t.strip()]
+
+        if st.button("🚀 執行同業比對", use_container_width=True):
+            opt_key = f"opt_{ticker}_{start_date}_{end_date}_{single_factor}"
+            best_params = st.session_state.get(opt_key, {})
+
+            with st.spinner("下載同業資料並執行回測，請稍候..."):
+                peer_data = fetch_peer_stock_data(tuple(peer_list), start_date, end_date)
+
+            peer_results = []
+            for pticker, pdf in peer_data.items():
+                try:
+                    fund_dummy = {k: None for k in ['P/E Ratio','P/B Ratio','ROE','Gross Margin','Inventory Turnover']}
+                    psigs = calc_all_signals(pdf, fund_dummy, p=best_params)
+                    praw = psigs[single_factor]
+                    ppos = []
+                    pc = 0
+                    for v in praw:
+                        if v == 1.0: pc = 1
+                        elif v == -1.0: pc = 0
+                        ppos.append(pc)
+                    ppos_series = pd.Series(ppos, index=pdf.index)
+                    pres = run_backtest(pdf, ppos_series, transaction_fee=0.0015)
+                    pm = pres['metrics']
+                    peer_results.append({
+                        '標的': pticker,
+                        '策略累積报酬 (%)': round(pm['total_return'] * 100, 2),
+                        'Buy & Hold (%)': round(pm['benchmark_return'] * 100, 2),
+                        '夏普値': round(pm['sharpe'], 2),
+                        '最大回撤 (%)': round(pm['max_dd'] * 100, 2),
+                        '勝率 (%)': round(pm['win_rate'] * 100, 1),
+                        '交易次數': pm['num_trades']
+                    })
+                except Exception:
+                    continue
+
+            if not peer_results:
+                st.error("全部同業資料下載失敗或計算異常。")
+            else:
+                pr_df = pd.DataFrame(peer_results)
+
+                # 絲帶長條對照圖
+                fig_peer = go.Figure()
+                fig_peer.add_trace(go.Bar(
+                    x=pr_df['標的'],
+                    y=pr_df['策略累積报酬 (%)'],
+                    name=f'{single_factor} 策略报酬 (%)',
+                    marker_color=['#00e5ff' if v >= 0 else '#ff1744' for v in pr_df['策略累積报酬 (%)']]
+                ))
+                fig_peer.add_trace(go.Bar(
+                    x=pr_df['標的'],
+                    y=pr_df['Buy & Hold (%)'],
+                    name='Buy & Hold 基準 (%)',
+                    marker_color='#8a99ad'
+                ))
+                fig_peer.update_layout(
+                    title=f'{single_factor} 因子同業策略績效比對（{start_date} ~ {end_date}）',
+                    barmode='group',
+                    template='plotly_dark',
+                    height=420,
+                    margin=dict(l=20, r=20, t=50, b=30),
+                    yaxis_title='累積报酬 (%)'
+                )
+                st.plotly_chart(fig_peer, use_container_width=True)
+
+                st.markdown("#### 📋 同業績效明細表")
+                st.dataframe(pr_df.set_index('標的').style.background_gradient(subset=['策略累積报酬 (%)'], cmap='RdYlGn'), use_container_width=True)
+        else:
+            st.info("調整同業清單後，點擊「執行同業比對」按鈕開始運算。")
