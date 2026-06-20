@@ -609,6 +609,186 @@ def calc_trade_win_rate(close, positions):
     return win_rate, len(trade_profits)
 
 # ==========================================
+# 4.4. 標的產業特性與因子指引定義與渲染
+# ==========================================
+SECTOR_PROFILES = {
+    "半導體製造": {
+        "fundamental_char": "高資本支出、高研發投入與景氣循環性強。產能利用率為獲利關鍵，先進製程業者（如台積電）具備強大定價權與高毛利率，但需注意折舊費用對獲利的影響。",
+        "technical_char": "股價波動較大，易受全球半導體景氣循環及美股費城半導體指數影響。波段趨勢明顯，適合順勢與均線指標，但在景氣轉折點波動劇烈。",
+        "recommended_factors": ["ROE (股東權益報酬率)", "MA Cross (均線黃金交叉)", "Gross Margin (毛利率)"],
+        "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "P/B Ratio (股價淨值比)", "CCI (順勢指標)"],
+        "outlook": "{company_name}先進製程與AI晶片需求極度暢旺，將帶動營收持續高成長，維持領先地位，長期展望明朗。"
+    },
+    "半導體": {
+        "fundamental_char": "高資本支出與高研發投入，AI與高效能運算需求為核心成長引擎。產業具高度景氣循環與技術壟斷特性，領導廠商利潤豐厚。",
+        "technical_char": "高貝塔（Beta）值，波動度高。股價受全球科技股資金流向與財報指引影響巨大，易形成強烈的多頭或空頭波段趨勢。",
+        "recommended_factors": ["Gross Margin (毛利率)", "MACD (平滑異同移動平均線)", "ROE (股東權益報酬率)"],
+        "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "P/B Ratio (股價淨值比)", "CCI (順勢指標)"],
+        "outlook": "{company_name}受惠於AI基礎建設與次世代晶片升級潮，核心技術壁壘高，業績將迎來爆發式成長，前景樂觀。"
+    },
+    "IC 設計": {
+        "fundamental_char": "無晶圓廠（Fabless）輕資產模式，高毛利但研發費用高。極度依賴新產品開發與終端消費性電子（手機、PC）需求，存貨週轉天數為重要指標。",
+        "technical_char": "高 Beta、高彈性，股價對利多與利空反應敏感。極易在短時間內形成爆發性大行情，也容易受題材炒作而劇烈波動。",
+        "recommended_factors": ["Inventory Turnover (存貨週轉率)", "RSI (相對強弱指標)", "Gross Margin (毛利率)"],
+        "not_recommended_factors": ["P/B Ratio (股價淨值比)", "OBV (能量潮指標)", "Williams %R (威廉指標)"],
+        "outlook": "{company_name}受惠消費性電子溫和復甦與AI邊緣運算，產品組合優化，毛利與獲利將重回成長軌道。"
+    },
+    "封裝測試": {
+        "fundamental_char": "半導體中游，屬資本折舊與勞力密集。獲利高度受上游晶圓代工廠產出影響，毛利率相對穩定，折舊占比較高，通常具備穩健的現金流。",
+        "technical_char": "相較於前段晶圓製造或IC設計，股價走勢較為溫和，多呈區間波動或隨產業大盤亦步亦趨，較不易出現極端暴漲暴跌。",
+        "recommended_factors": ["ROE (股東權益報酬率)", "P/E Ratio (本益比)", "Bollinger Bands (布林通道)"],
+        "not_recommended_factors": ["ATR Trend (均幅指標趨勢)", "ADX (趨勢強度指標)", "Williams %R (威廉指標)"],
+        "outlook": "隨先進封裝產能開出與上游晶圓代工滿載，{company_name}訂單能見度高，獲利將呈現穩健成長。"
+    },
+    "半導體設備/材料": {
+        "fundamental_char": "高度集中於少數龍頭，研發週期與認證時間極長。營收深受各大晶圓代工廠資本支出計畫影響，具備高經營槓桿與寡占利潤。",
+        "technical_char": "走勢與全球半導體廠的擴產循環高度連動。股價往往領先產業景氣見底或見頂，呈現高度前瞻與高波動的特徵。",
+        "recommended_factors": ["ROE (股東權益報酬率)", "MA Cross (均線黃金交叉)", "P/E Ratio (本益比)"],
+        "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "Williams %R (威廉指標)", "CCI (順勢指標)"],
+        "outlook": "全球晶圓廠在地化建廠與先進製程擴產需求暢旺，{company_name}訂單積壓量大，成長前景極為明確。"
+    },
+    "電腦/伺服器": {
+        "fundamental_char": "屬電子代工組裝（OEM/ODM）中下游，營業毛利率偏低（保三保四），但營收規模巨大。近年受惠於AI伺服器高單價出貨，帶動利潤率與獲利能力改善。",
+        "technical_char": "股價以往走勢沉穩、具高殖利率特性，但近期因AI伺服器題材轉為高波動、高動能特徵，資金聚焦效應顯著。",
+        "recommended_factors": ["Gross Margin (毛利率)", "MACD (平滑異同移動平均線)", "ROE (股東權益報酬率)"],
+        "not_recommended_factors": ["P/B Ratio (股價淨值比)", "Inventory Turnover (存貨週轉率)", "Williams %R (威廉指標)"],
+        "outlook": "{company_name}受惠AI伺服器出貨量高成長，帶動平均售價與毛利率向上走升，前景十分看好。"
+    },
+    "科技": {
+        "fundamental_char": "具備強大的品牌壁壘、高用戶黏性與龐大的現金流。輕資產與高附加價值，營業利潤率極高，並具備抗禦經濟不景氣的韌性。",
+        "technical_char": "市值巨大、外資法人主要基本持股，走勢常與大盤（S&P 500、Nasdaq）高度重合。長期呈穩定上揚趨勢，波動度相對中等穩健。",
+        "recommended_factors": ["ROE (股東權益報酬率)", "MA Cross (均線黃金交叉)", "P/E Ratio (本益比)"],
+        "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "CCI (順勢指標)", "Williams %R (威廉指標)"],
+        "outlook": "{company_name}在雲端、軟體與AI生態系佈局成熟，將持續轉化為穩定高獲利與現金流，長期展望強勁。"
+    },
+    "通訊/網路": {
+        "fundamental_char": "典型電信與寬頻服務業，營收主要來自月租費，客戶黏著度極高，不受景氣影響。資本支出大但折舊固定，具高配息與高現金殖利率特性。",
+        "technical_char": "防禦型類股，貝塔值（Beta）極低，股價平穩，波動範圍極小。主要走勢為除權息填息行情，大盤大跌時具避險防禦屬性。",
+        "recommended_factors": ["P/E Ratio (本益比)", "Bollinger Bands (布林通道)", "RSI (相對強弱指標)"],
+        "not_recommended_factors": ["ATR Trend (均幅指標趨勢)", "ADX (趨勢強度指標)", "Inventory Turnover (存貨週轉率)"],
+        "outlook": "{company_name}受惠5G滲透率提升與加值服務成長，現金流與配息穩定，為優質防禦標的。"
+    },
+    "電子零組件": {
+        "fundamental_char": "提供各式被動元件、電源供應器或PCB等零組件，毛利率中等。受下游終端電子產品出貨量以及原料價格影響，景氣波動性顯著。",
+        "technical_char": "走勢與科技製造業大盤高度相關。因單價較低，市場常以庫存回補週期作為買賣時點，股價呈現明顯的週期循環與區間震盪特徵。",
+        "recommended_factors": ["ROE (股東權益報酬率)", "Inventory Turnover (存貨週轉率)", "Stochastic KD (隨機指標)"],
+        "not_recommended_factors": ["P/B Ratio (股價淨值比)", "ADX (趨勢強度指標)", "Williams %R (威廉指標)"],
+        "outlook": "車用電子與AI基礎設施帶動組件升級，{company_name}庫存調整完畢，出貨將重拾成長動能。"
+    },
+    "金融": {
+        "fundamental_char": "受各國央行利率政策、匯率變動及債券市場波動影響巨大。槓桿率高、資本適足率受嚴格管制，獲利以淨利差及投資收益為主，多具有穩定配息能力。",
+        "technical_char": "波動度一般低於科技股，走勢常與市場利率及債券殖利率呈正相關。交易量大、法人持股比重高，極少出現暴漲暴跌，多呈現中長期的區間走勢。",
+        "recommended_factors": ["P/B Ratio (股價淨值比)", "ROE (股東權益報酬率)", "Bollinger Bands (布林通道)"],
+        "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "Gross Margin (毛利率)", "ATR Trend (均幅指標趨勢)"],
+        "outlook": "利率高檔有利擴大淨利差，{company_name}伴隨股市回暖帶動資產管理利潤，獲利與配息維持穩健。"
+    },
+    "傳產/化工": {
+        "fundamental_char": "傳統重工業或基礎民生工業，資本密集、折舊沉重。獲利深受國際原物料價格（油價、鋼價）與全球總體需求影響，具有極強的週期循環性。",
+        "technical_char": "多頭與空頭波段極長且緩慢，股價在景氣谷底時本益比極高（甚至虧損），股價淨值比低；景氣高峰時本益比極低，適合反向操作。",
+        "recommended_factors": ["P/B Ratio (股價淨值比)", "MACD (平滑異同移動平均線)", "RSI (相對強弱指標)"],
+        "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "Gross Margin (毛利率)", "Williams %R (威廉指標)"],
+        "outlook": "全球基礎建設復甦及原物料價格支撐，{company_name}產業獲利觸底回升，營運正迎來溫和復甦。"
+    }
+}
+
+DEFAULT_PROFILE = {
+    "fundamental_char": "具備一定成長性，受終端客戶拉貨與總體經濟循環影響。需留意獲利能力指標（ROE及毛利率）的變動以及債務比重。",
+    "technical_char": "波動度中等。股價隨市場板塊輪動與法人資金配置而呈波段起伏，適合指標突破或區間震盪交易策略。",
+    "recommended_factors": ["ROE (股東權益報酬率)", "MA Cross (均線黃金交叉)", "RSI (相對強弱指標)"],
+    "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "Williams %R (威廉指標)", "CCI (順勢指標)"],
+    "outlook": "受惠數位轉型與智慧化需求，{company_name}營運將維持穩健，需觀察全球供應鏈庫存調整進度。"
+}
+
+def render_stock_industry_guidelines(ticker, info):
+    # 1. 取得公司中文名稱與產業類別
+    company_name = ticker
+    target_sector = None
+    for mkt_key, sectors in PEER_DB.items():
+        for sec_key, tickers_dict in sectors.items():
+            if ticker in tickers_dict:
+                company_name = tickers_dict[ticker]
+                target_sector = sec_key
+                break
+        if target_sector:
+            break
+            
+    # 如果沒找到，嘗試 yfinance info 裡的名稱與產業
+    if company_name == ticker and info:
+        company_name = info.get('longName') or info.get('shortName') or ticker
+        
+    if not target_sector and info:
+        yf_sector = info.get('sector', '')
+        yf_industry = info.get('industry', '')
+        if 'Semiconductor' in yf_industry or 'Semiconductors' in yf_industry:
+            target_sector = "半導體"
+        elif 'Software' in yf_industry or 'Internet' in yf_industry or 'Technology' in yf_sector:
+            target_sector = "科技"
+        elif 'Financial' in yf_sector or 'Bank' in yf_industry:
+            target_sector = "金融"
+        elif 'Telecom' in yf_industry or 'Communication' in yf_sector:
+            target_sector = "通訊/網路"
+            
+    if not target_sector:
+        target_sector = "通用科技"
+        
+    # 2. 獲取對應的特徵與因子
+    profile = SECTOR_PROFILES.get(target_sector, DEFAULT_PROFILE)
+    
+    # 3. 填入公司名稱產生的 outlook
+    outlook_text = profile["outlook"].format(company_name=company_name)
+    # 限制字數在 50 字以內，做截斷以防萬一
+    if len(outlook_text) > 48:
+        outlook_text = outlook_text[:47] + "..."
+        
+    # 4. 繪製精緻的 UI
+    rec_html = "".join([f"<li>{f}</li>" for f in profile['recommended_factors']])
+    not_rec_html = "".join([f"<li>{f}</li>" for f in profile['not_recommended_factors']])
+    
+    st.markdown(
+        f"""
+        <div style="background-color: rgba(28, 30, 41, 0.5); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 8px; padding: 15px; margin-top: 15px; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(128, 128, 128, 0.1); padding-bottom: 8px; margin-bottom: 12px;">
+                <span style="font-size: 1.05rem; font-weight: bold; color: #4299E1; display: flex; align-items: center; gap: 6px;">
+                    💡 {company_name} ({ticker}) — 產業分析與投資因子指引
+                </span>
+                <span style="font-size: 0.8rem; color: #63B3ED; background-color: rgba(99, 179, 237, 0.15); padding: 2px 8px; border-radius: 4px; font-weight: 500;">
+                    {target_sector} 類股
+                </span>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 12px;">
+                <div>
+                    <strong style="color: #ECC94B; font-size: 0.9rem;">🧱 產業基本面特性：</strong>
+                    <p style="font-size: 0.85rem; color: #E2E8F0; margin: 4px 0 0 0; line-height: 1.45;">{profile['fundamental_char']}</p>
+                </div>
+                <div>
+                    <strong style="color: #63B3ED; font-size: 0.9rem;">📈 技術面特性：</strong>
+                    <p style="font-size: 0.85rem; color: #E2E8F0; margin: 4px 0 0 0; line-height: 1.45;">{profile['technical_char']}</p>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 12px; border-top: 1px solid rgba(128, 128, 128, 0.05); padding-top: 10px;">
+                <div>
+                    <strong style="color: #48BB78; font-size: 0.9rem;">👍 市場利用度最高前三種因子：</strong>
+                    <ul style="font-size: 0.85rem; color: #E2E8F0; margin: 4px 0 0 0; padding-left: 18px; line-height: 1.45;">
+                        {rec_html}
+                    </ul>
+                </div>
+                <div>
+                    <strong style="color: #F56565; font-size: 0.9rem;">👎 最不推薦三種因子 (參考度低)：</strong>
+                    <ul style="font-size: 0.85rem; color: #E2E8F0; margin: 4px 0 0 0; padding-left: 18px; line-height: 1.45;">
+                        {not_rec_html}
+                    </ul>
+                </div>
+            </div>
+            <div style="border-top: 1px solid rgba(128, 128, 128, 0.1); padding-top: 10px; margin-top: 10px;">
+                <strong style="color: #ED64A6; font-size: 0.9rem;">🔮 個股前景簡評 (50字內)：</strong>
+                <p style="font-size: 0.9rem; color: #F7FAFC; font-weight: 500; margin: 4px 0 0 0; font-style: italic; line-height: 1.45;">「 {outlook_text} 」</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# ==========================================
 # 4.5. 視覺化繪圖與 KPI 渲染函數
 # ==========================================
 def render_kpi_card(title, value, delta_str, is_positive):
@@ -1313,6 +1493,9 @@ with tab1:
         st.info(f"**【{strategy_name}】** {desc}")
     else:
         st.info(f"**【複合權重策略】** 綜合選定之多個技術與基本面因子，以加權分數形式（-1.0 ~ 1.0）計算。當複合訊號值大於交易門檻 {threshold} 時買入做多，小於 -{threshold} 時平倉出局。")
+
+    # 渲染標的產業與因子特性分析
+    render_stock_industry_guidelines(ticker, info)
 
     # KPI 區塊
     st.markdown("### 🏆 當前回測結果 KPI")
