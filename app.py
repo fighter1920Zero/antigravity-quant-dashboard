@@ -16,6 +16,28 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ==========================================
+# 1.1 載入模擬參數處理 (避免在元件實例化後修改 session_state)
+# ==========================================
+if 'loaded_params' in st.session_state:
+    params = st.session_state.loaded_params
+    
+    st.session_state['ticker'] = params['ticker']
+    st.session_state['start_date'] = params['start_date']
+    st.session_state['end_date'] = params['end_date']
+    st.session_state['mode'] = params['mode']
+    st.session_state['cost'] = params['cost']
+    
+    if params['mode'] == "單一因子":
+        st.session_state['single_factor'] = params['single_factor']
+    else:
+        st.session_state['threshold'] = params['threshold']
+        for factor_name, weight_val in params['weights'].items():
+            st.session_state[f"w_{factor_name}"] = weight_val
+            
+    # 清除暫存資料
+    del st.session_state.loaded_params
+
 # 套用精緻的深色 Glassmorphism 風格 CSS
 st.markdown("""
 <style>
@@ -570,20 +592,8 @@ if 'simulation_history' not in st.session_state:
 
 # 用於將參數載入到 UI 中
 def load_params_into_ui(sim):
-    params = sim['params']
-    st.session_state['ticker'] = params['ticker']
-    st.session_state['start_date'] = params['start_date']
-    st.session_state['end_date'] = params['end_date']
-    st.session_state['mode'] = params['mode']
-    st.session_state['cost'] = params['cost']
-    
-    if params['mode'] == "單一因子":
-        st.session_state['single_factor'] = params['single_factor']
-    else:
-        st.session_state['threshold'] = params['threshold']
-        for factor_name, weight_val in params['weights'].items():
-            st.session_state[f"w_{factor_name}"] = weight_val
-            
+    # 將參數儲存到暫存區，並呼叫 rerun 在下一次執行的開頭載入，避免 widget 鎖定錯誤
+    st.session_state.loaded_params = sim['params']
     st.sidebar.success(f"已載入: {sim['name']}")
     st.rerun()
 
