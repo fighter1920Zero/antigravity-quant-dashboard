@@ -518,13 +518,17 @@ def plot_candlestick(df, sma20=None, sma60=None):
     if sma60 is not None:
         fig.add_trace(go.Scatter(x=df.index, y=sma60, name='SMA 60', line=dict(color='#2979ff', width=1.5)), row=1, col=1)
         
-    # 量能長條圖 (紅綠比對)
-    colors = ['#ff1744' if cl < op else '#00e676' for cl, op in zip(df['Close'], df['Open'])]
+    # 量能長條圖 — 使用鮮豔的上漲色彩，傳統紅綠加上 0.85 opacity
+    vol_colors = [
+        'rgba(0, 230, 118, 0.85)' if cl >= op else 'rgba(255, 23, 68, 0.85)'
+        for cl, op in zip(df['Close'], df['Open'])
+    ]
     fig.add_trace(go.Bar(
         x=df.index,
         y=df['Volume'],
         name='Volume',
-        marker_color=colors
+        marker_color=vol_colors,
+        marker_line_width=0
     ), row=2, col=1)
     
     fig.update_layout(
@@ -534,9 +538,11 @@ def plot_candlestick(df, sma20=None, sma60=None):
         margin=dict(l=30, r=30, t=30, b=30),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
+    # 調亮量能區小標題
+    fig.update_yaxes(title_text="量 (Volume)", row=2, col=1, title_font=dict(color='#90caf9'))
     return fig
 
-def plot_equity_and_drawdown(equity_curve, benchmark_curve):
+def plot_equity_and_drawdown(equity_curve, benchmark_curve, positions=None):
     fig = make_subplots(
         rows=2, cols=1, 
         shared_xaxes=True,
@@ -548,6 +554,32 @@ def plot_equity_and_drawdown(equity_curve, benchmark_curve):
     # 策略與基準
     fig.add_trace(go.Scatter(x=equity_curve.index, y=equity_curve, name='策略複利權益', line=dict(color='#00e5ff', width=2)), row=1, col=1)
     fig.add_trace(go.Scatter(x=benchmark_curve.index, y=benchmark_curve, name='買入持有基準', line=dict(color='#8a99ad', width=1.5, dash='dash')), row=1, col=1)
+    
+    # 買進 / 賣出標記點
+    if positions is not None:
+        pos_diff = positions.diff().fillna(0)
+        buy_dates  = pos_diff[pos_diff == 1].index
+        sell_dates = pos_diff[pos_diff == -1].index
+
+        if len(buy_dates) > 0:
+            fig.add_trace(go.Scatter(
+                x=buy_dates,
+                y=equity_curve.reindex(buy_dates),
+                mode='markers',
+                name='買進點 ▲',
+                marker=dict(symbol='triangle-up', color='#00e676', size=12,
+                            line=dict(color='#ffffff', width=1))
+            ), row=1, col=1)
+
+        if len(sell_dates) > 0:
+            fig.add_trace(go.Scatter(
+                x=sell_dates,
+                y=equity_curve.reindex(sell_dates),
+                mode='markers',
+                name='賣出點 ▼',
+                marker=dict(symbol='triangle-down', color='#ff1744', size=12,
+                            line=dict(color='#ffffff', width=1))
+            ), row=1, col=1)
     
     # 水下圖
     cum_max = equity_curve.cummax()
@@ -564,7 +596,7 @@ def plot_equity_and_drawdown(equity_curve, benchmark_curve):
     
     fig.update_layout(
         template='plotly_dark',
-        height=500,
+        height=520,
         margin=dict(l=30, r=30, t=30, b=30),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
@@ -648,7 +680,21 @@ def_cost = st.session_state.get('cost', 0.15) / 100.0
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📈 基本配置")
-ticker = st.sidebar.text_input("股票代碼", value=def_ticker, key="ticker")
+
+# ── 選單式個股挑選器 ───────────────────────────────
+with st.sidebar.expander("🔍 挑選個股（市場/類股選單）", expanded=False):
+    sb_mkt = st.selectbox("市場", ["台股", "美股"], key="sb_mkt")
+    sb_sec_list = list(PEER_DB.get(sb_mkt, {}).keys())
+    sb_sec = st.selectbox("產業類別", sb_sec_list, key="sb_sec")
+    sb_stk_dict = PEER_DB.get(sb_mkt, {}).get(sb_sec, {})
+    sb_stk_labels = [f"{t} {n}" for t, n in sb_stk_dict.items()]
+    sb_selected = st.selectbox("選擇個股", sb_stk_labels, key="sb_stk")
+    if st.button("✅ 套用此個股代碼", use_container_width=True):
+        selected_code = sb_selected.split()[0]
+        st.session_state['ticker'] = selected_code
+        st.rerun()
+
+ticker = st.sidebar.text_input("股票代碼（台股加 .TW）", value=def_ticker, key="ticker")
 start_date = st.sidebar.date_input("開始日期", value=def_start, key="start_date")
 end_date = st.sidebar.date_input("結束日期", value=def_end, key="end_date")
 
@@ -1309,8 +1355,11 @@ with tab1:
     # Plotly 互動圖表區
     st.markdown("### 📈 互動式圖表分析")
     
-    # 圖表 1: 權益與水下圖
-    st.plotly_chart(plot_equity_and_drawdown(res['equity_curve'], res['benchmark_curve']), use_container_width=True)
+    # 圖表 1: 權益與水下圖（含買賣點）
+    st.plotly_chart(
+        plot_equity_and_drawdown(res['equity_curve'], res['benchmark_curve'], res['positions']),
+        use_container_width=True
+    )
     
     # 圖表 2: K線圖與指標 (只在單一因子模式下顯示相應技術線)
     st.markdown("### 🕯️ 標的 K 線圖與量價分析")
@@ -1500,7 +1549,24 @@ with tab3:
 
             st.caption(f"📋 將比對的標的（共 {len(peer_list_t3)} 檔）：{', '.join(peer_list_t3)}")
 
-            # ── Section C: 執行 ────────────────────────────────────
+            # 參考連結：查詢股票代碼
+            with st.expander("🔗 股票代碼查詢參考連結", expanded=False):
+                st.markdown("""
+| 市場 | 平台 | 說明 |
+|------|------|------|
+| 🇹🇼 台股 | [台灣證券交易所 TWSE 上市公司查詢](https://isin.twse.com.tw/isin/C_public.jsp?strMode=2) | 完整上市股票代碼清單 |
+| 🇹🇼 台股OTC | [台灣OTC上櫃公司查詢](https://isin.twse.com.tw/isin/C_public.jsp?strMode=4) | 上櫃股票（代碼加 .TWO）|
+| 🇹🇼 台股 | [Yahoo 台股代碼搜尋](https://tw.stock.yahoo.com/s/list.php?c=%E5%8D%8A%E5%B0%8E%E9%AB%94) | 依產業類別瀏覽 |
+| 🇺🇸 美股 | [Yahoo Finance Stock Screener](https://finance.yahoo.com/screener/) | 依產業/市值篩選 |
+| 🇺🇸 美股 | [Nasdaq Company Listing](https://www.nasdaq.com/market-activity/stocks/screener) | Nasdaq 完整清單 |
+
+**代碼格式說明：**
+- 台股上市：`代碼.TW`（例：`2330.TW`）
+- 台股上櫃：`代碼.TWO`（例：`5347.TWO`）
+- 美股：直接輸入代碼（例：`NVDA`）
+                """)
+
+
             st.markdown("---")
             if st.button("🚀 執行同業策略比對", use_container_width=True, key="run_peer_t3"):
                 if not peer_list_t3:
