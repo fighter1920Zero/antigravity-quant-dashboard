@@ -665,6 +665,110 @@ factors_list = [
     "P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"
 ]
 
+FACTOR_DISPLAY = {
+    "MA Cross":           "MA Cross 均線交叉",
+    "RSI":                "RSI 相對強弱指數",
+    "Stochastic KD":      "Stochastic KD 隨機震盪指標",
+    "MACD":               "MACD 指數平滑異同移動平均",
+    "Bollinger Bands":    "Bollinger Bands 布林通道",
+    "ATR Trend":          "ATR Trend 真實波幅趨勢",
+    "ADX":                "ADX 平均趨向指數",
+    "CCI":                "CCI 商品通道指數",
+    "OBV":                "OBV 能量潮指標",
+    "Williams %R":        "Williams %R 威廉指標",
+    "P/E Ratio":          "P/E Ratio 本益比",
+    "P/B Ratio":          "P/B Ratio 股價淨值比",
+    "ROE":                "ROE 股東權益報酬率",
+    "Gross Margin":       "Gross Margin 毛利率",
+    "Inventory Turnover": "Inventory Turnover 存貨週轉率",
+}
+
+# 同業標的資料庫 (市場 → 產業 → {代號: 公司名})
+PEER_DB = {
+    "台股": {
+        "半導體製造": {
+            "2330.TW": "台積電",
+            "2303.TW": "聯電",
+            "5347.TWO": "世界先進",
+            "2344.TW": "華邦電",
+            "2408.TW": "南亞科",
+        },
+        "IC 設計": {
+            "2454.TW": "聯發科",
+            "2379.TW": "瑞昱半導體",
+            "3034.TW": "聯詠科技",
+            "2385.TW": "群光電子",
+            "3443.TW": "創意電子",
+        },
+        "封裝測試": {
+            "3711.TW": "日月光投控",
+            "2325.TW": "矽品精密",
+            "6531.TW": "愛普科技",
+        },
+        "半導體設備/材料": {
+            "3105.TW": "穩懋半導體",
+            "3529.TW": "力旺電子",
+            "6669.TW": "緯穎科技",
+        },
+        "電子零組件": {
+            "2317.TW": "鴻海精密",
+            "2382.TW": "廣達電腦",
+            "2357.TW": "華碩電腦",
+            "2354.TW": "鴻準精密",
+        },
+        "金融": {
+            "2882.TW": "國泰金控",
+            "2881.TW": "富邦金控",
+            "2886.TW": "兆豐金控",
+            "2884.TW": "玉山金控",
+        },
+        "傳產/化工": {
+            "1301.TW": "台灣塑膠",
+            "1303.TW": "南亞塑膠",
+            "2002.TW": "中國鋼鐵",
+            "1216.TW": "統一企業",
+        },
+    },
+    "美股": {
+        "半導體": {
+            "TSM":  "台積電 ADR",
+            "NVDA": "輝達 Nvidia",
+            "AMD":  "超微 AMD",
+            "INTC": "英特爾",
+            "ASML": "艾司摩爾",
+            "QCOM": "高通",
+            "AVGO": "博通",
+            "MU":   "美光科技",
+            "AMAT": "應用材料",
+            "LRCX": "科林研發",
+        },
+        "科技": {
+            "AAPL":  "蘋果",
+            "MSFT":  "微軟",
+            "GOOGL": "Alphabet",
+            "META":  "Meta",
+            "AMZN":  "亞馬遜",
+        },
+        "金融": {
+            "JPM": "摩根大通",
+            "BAC": "美國銀行",
+            "GS":  "高盛",
+            "MS":  "摩根史坦利",
+        },
+        "醫療/生技": {
+            "JNJ":  "嬌生",
+            "PFE":  "輝瑞",
+            "MRNA": "莫德納",
+            "ABBV": "艾伯維",
+        },
+        "能源": {
+            "XOM": "埃克森美孚",
+            "CVX": "雪佛龍",
+            "COP": "康菲石油",
+        },
+    },
+}
+
 single_factor = ""
 weights = {}
 threshold = 0.1
@@ -673,7 +777,13 @@ if mode == "單一因子":
     def_single = st.session_state.get('single_factor', 'RSI')
     if def_single not in factors_list:
         def_single = 'RSI'
-    single_factor = st.sidebar.selectbox("選擇交易因子", factors_list, index=factors_list.index(def_single), key="single_factor")
+    single_factor = st.sidebar.selectbox(
+        "選擇交易因子",
+        factors_list,
+        index=factors_list.index(def_single),
+        key="single_factor",
+        format_func=lambda x: FACTOR_DISPLAY.get(x, x)
+    )
 else:
     def_thresh = st.session_state.get('threshold', 0.1)
     threshold = st.sidebar.slider("複合訊號交易門檻", min_value=0.0, max_value=0.5, value=def_thresh, step=0.05, key="threshold")
@@ -681,7 +791,7 @@ else:
     st.sidebar.markdown("**調整因子權重 (0 - 100%)**")
     for f in factors_list:
         def_w = st.session_state.get(f"w_{f}", 20 if f in ["MA Cross", "RSI", "MACD"] else 0)
-        weights[f] = st.sidebar.slider(f, min_value=0, max_value=100, value=def_w, step=5, key=f"w_{f}")
+        weights[f] = st.sidebar.slider(FACTOR_DISPLAY.get(f, f), min_value=0, max_value=100, value=def_w, step=5, key=f"w_{f}")
 
 # ==========================================
 # 7.2. 因子參數細部調整 (側邊欄摺疊區)
@@ -908,6 +1018,42 @@ if mode == "單一因子" and single_factor not in ["P/E Ratio", "P/B Ratio", "R
         sess_key = f"p_{k}"
         if sess_key not in st.session_state:
             st.session_state[sess_key] = v
+
+# ==========================================
+# 7.4. 同業回測輔助函數
+# ==========================================
+def run_sim_on_df(df, sim_params, transaction_fee=0.0015):
+    """Replay a saved simulation's strategy on a different stock DataFrame."""
+    fund_dummy = {k: None for k in ['P/E Ratio','P/B Ratio','ROE','Gross Margin','Inventory Turnover']}
+    p = sim_params.get('ind_params', {})
+    mode_s = sim_params.get('mode', '單一因子')
+    sigs = calc_all_signals(df, fund_dummy, p=p)
+
+    if mode_s == '單一因子':
+        factor = sim_params.get('single_factor', 'RSI')
+        raw = sigs.get(factor, pd.Series(0.0, index=df.index))
+        pos, curr = [], 0
+        for v in raw:
+            if v == 1.0: curr = 1
+            elif v == -1.0: curr = 0
+            pos.append(curr)
+        pos_series = pd.Series(pos, index=df.index, dtype=float)
+    else:
+        weights_s = sim_params.get('weights', {})
+        threshold_s = sim_params.get('threshold', 0.1)
+        total_w = sum(weights_s.values()) or 1
+        composite = sum(
+            sigs.get(f, pd.Series(0.0, index=df.index)) * (w / 100.0)
+            for f, w in weights_s.items()
+        )
+        pos, curr = [], 0
+        for v in composite:
+            if v > threshold_s: curr = 1
+            elif v < -threshold_s: curr = 0
+            pos.append(curr)
+        pos_series = pd.Series(pos, index=df.index, dtype=float)
+
+    return run_backtest(df, pos_series, transaction_fee=transaction_fee)
 
 # 下載資料
 with st.spinner("獲取 yfinance 歷史數據與基本面..."):
@@ -1296,94 +1442,165 @@ with tab2:
         else:
             st.info("請在上方下拉選單中勾選至少一個模擬策略以顯示對照圖。")
 
-# ----------------- Tab 3: 參數最佳化與同業比對 -----------------
+# ----------------- Tab 3: 同業策略適用性比對 -----------------
 with tab3:
-    st.markdown("### 🔍 參數最佳化與同業比對")
+    st.markdown("### 🔍 同業策略適用性比對")
+    st.write("從左側模擬歷史紀錄中選擇策略，套用到同市場其他標的，驗證投資規則的普適性。")
 
-    if mode != "單一因子" or single_factor in ["P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"]:
-        st.warning("此功能僅支持「單一因子」模式中的技術面因子，請將回測模式切換到「單一因子」且選擇一個技術因子。")
-    elif df is None:
-        st.error("請先成功載入主要標的資料。")
+    # ── Section A: 選擇策略 ──────────────────────────────────
+    st.markdown("#### 📂 Step 1｜選擇要套用的策略")
+    if not st.session_state.simulation_history:
+        st.warning("⚠️ 尚無模擬歷史紀錄。請先在左側邊欄設定參數並點擊「開始模擬並儲存記錄」，至少儲存一個策略後再使用此功能。")
     else:
-        # 辨識台股 vs 美股
-        is_taiwan = ticker.upper().endswith('.TW') or ticker.upper().endswith('.TWO')
-        if is_taiwan:
-            default_peers = ['2330.TW', '2454.TW', '2303.TW', '3711.TW', '5347.TWO']
-            market_label = "台股半導體同業"
+        sim_options_t3 = {sim['id']: sim['name'] for sim in st.session_state.simulation_history}
+        selected_sim_ids = st.multiselect(
+            "勾選要比對的策略（可多選）",
+            options=list(sim_options_t3.keys()),
+            default=list(sim_options_t3.keys())[:1],
+            format_func=lambda x: sim_options_t3[x]
+        )
+
+        if not selected_sim_ids:
+            st.info("請至少勾選一個策略。")
         else:
-            default_peers = ['TSM', 'NVDA', 'AMD', 'ASML', 'INTC']
-            market_label = "美股半導體同業"
+            selected_sims = [s for s in st.session_state.simulation_history if s['id'] in selected_sim_ids]
 
-        st.markdown(f"#### {market_label} 策略適用性比對")
-        st.write(f"目前使用的因子：**{single_factor}**，將以最佳參數對 {market_label} 個股進行回測比對。")
+            # ── Section B: 選擇比對標的 ────────────────────────────
+            st.markdown("---")
+            st.markdown("#### 🗺️ Step 2｜選擇比對標的")
 
-        peer_input = st.text_input("同業比對清單（逗號分隔）", value=",".join(default_peers))
-        peer_list = [t.strip() for t in peer_input.split(",") if t.strip()]
-
-        if st.button("🚀 執行同業比對", use_container_width=True):
-            opt_key = f"opt_{ticker}_{start_date}_{end_date}_{single_factor}"
-            best_params = st.session_state.get(opt_key, {})
-
-            with st.spinner("下載同業資料並執行回測，請稍候..."):
-                peer_data = fetch_peer_stock_data(tuple(peer_list), start_date, end_date)
-
-            peer_results = []
-            for pticker, pdf in peer_data.items():
-                try:
-                    fund_dummy = {k: None for k in ['P/E Ratio','P/B Ratio','ROE','Gross Margin','Inventory Turnover']}
-                    psigs = calc_all_signals(pdf, fund_dummy, p=best_params)
-                    praw = psigs[single_factor]
-                    ppos = []
-                    pc = 0
-                    for v in praw:
-                        if v == 1.0: pc = 1
-                        elif v == -1.0: pc = 0
-                        ppos.append(pc)
-                    ppos_series = pd.Series(ppos, index=pdf.index)
-                    pres = run_backtest(pdf, ppos_series, transaction_fee=0.0015)
-                    pm = pres['metrics']
-                    peer_results.append({
-                        '標的': pticker,
-                        '策略累積报酬 (%)': round(pm['total_return'] * 100, 2),
-                        'Buy & Hold (%)': round(pm['benchmark_return'] * 100, 2),
-                        '夏普値': round(pm['sharpe'], 2),
-                        '最大回撤 (%)': round(pm['max_dd'] * 100, 2),
-                        '勝率 (%)': round(pm['win_rate'] * 100, 1),
-                        '交易次數': pm['num_trades']
-                    })
-                except Exception:
-                    continue
-
-            if not peer_results:
-                st.error("全部同業資料下載失敗或計算異常。")
-            else:
-                pr_df = pd.DataFrame(peer_results)
-
-                # 絲帶長條對照圖
-                fig_peer = go.Figure()
-                fig_peer.add_trace(go.Bar(
-                    x=pr_df['標的'],
-                    y=pr_df['策略累積报酬 (%)'],
-                    name=f'{single_factor} 策略报酬 (%)',
-                    marker_color=['#00e5ff' if v >= 0 else '#ff1744' for v in pr_df['策略累積报酬 (%)']]
-                ))
-                fig_peer.add_trace(go.Bar(
-                    x=pr_df['標的'],
-                    y=pr_df['Buy & Hold (%)'],
-                    name='Buy & Hold 基準 (%)',
-                    marker_color='#8a99ad'
-                ))
-                fig_peer.update_layout(
-                    title=f'{single_factor} 因子同業策略績效比對（{start_date} ~ {end_date}）',
-                    barmode='group',
-                    template='plotly_dark',
-                    height=420,
-                    margin=dict(l=20, r=20, t=50, b=30),
-                    yaxis_title='累積报酬 (%)'
+            col_mkt, col_sec, col_stk = st.columns([1, 1, 2])
+            with col_mkt:
+                mkt_choice = st.selectbox("市場", list(PEER_DB.keys()), key="peer_mkt")
+            with col_sec:
+                sec_list = list(PEER_DB[mkt_choice].keys())
+                sec_choice = st.selectbox("產業類別", sec_list, key="peer_sec")
+            with col_stk:
+                stk_dict = PEER_DB[mkt_choice][sec_choice]   # {ticker: name}
+                stk_options = list(stk_dict.keys())
+                stk_labels  = [f"{t} {n}" for t, n in stk_dict.items()]
+                sel_stk_labels = st.multiselect(
+                    "個股選擇（可多選）",
+                    options=stk_labels,
+                    default=stk_labels[:5],
+                    key="peer_stocks"
                 )
-                st.plotly_chart(fig_peer, use_container_width=True)
+            # 額外手動輸入
+            extra_input = st.text_input(
+                "額外手動輸入代碼（逗號分隔，選填）",
+                value="",
+                placeholder="例: 2330.TW, NVDA",
+                key="peer_extra"
+            )
+            # 組合最終清單
+            peer_list_t3 = [lbl.split()[0] for lbl in sel_stk_labels]
+            if extra_input.strip():
+                peer_list_t3 += [t.strip() for t in extra_input.split(",") if t.strip()]
+            peer_list_t3 = list(dict.fromkeys(peer_list_t3))   # 去重
 
-                st.markdown("#### 📋 同業績效明細表")
-                st.dataframe(pr_df.set_index('標的').style.background_gradient(subset=['策略累積报酬 (%)'], cmap='RdYlGn'), use_container_width=True)
-        else:
-            st.info("調整同業清單後，點擊「執行同業比對」按鈕開始運算。")
+            st.caption(f"📋 將比對的標的（共 {len(peer_list_t3)} 檔）：{', '.join(peer_list_t3)}")
+
+            # ── Section C: 執行 ────────────────────────────────────
+            st.markdown("---")
+            if st.button("🚀 執行同業策略比對", use_container_width=True, key="run_peer_t3"):
+                if not peer_list_t3:
+                    st.error("請先選擇至少一個比對標的。")
+                else:
+                    with st.spinner("下載同業歷史資料並套用策略回測中，請稍候..."):
+                        peer_data_t3 = fetch_peer_stock_data(tuple(peer_list_t3), start_date, end_date)
+
+                    if not peer_data_t3:
+                        st.error("所有標的資料下載失敗，請確認代碼正確性及網路連線。")
+                    else:
+                        # 計算每個 (策略, 標的) 的回測結果
+                        all_results  = []   # for table
+                        chart_traces = []   # for bar chart
+
+                        bar_colors = ['#00e5ff','#7c4dff','#00e676','#ff6d00','#ff4081']
+
+                        for sim_idx, sim in enumerate(selected_sims):
+                            sim_label = sim['name'].replace(" | ", "\n")
+                            sim_rets  = []
+                            sim_bh    = []
+                            sim_tickers = []
+
+                            for pt, pdf in peer_data_t3.items():
+                                try:
+                                    pres = run_sim_on_df(pdf, sim['params'], transaction_fee=sim['params'].get('cost', 0.15) / 100.0)
+                                    pm   = pres['metrics']
+                                    pt_name = PEER_DB.get(mkt_choice, {}).get(sec_choice, {}).get(pt, pt)
+                                    display_name = f"{pt} {pt_name}" if pt_name != pt else pt
+
+                                    all_results.append({
+                                        '標的':          display_name,
+                                        '策略':          sim['name'],
+                                        '策略累積報酬 (%)': round(pm['total_return'] * 100, 2),
+                                        'Buy & Hold (%)':  round(pm['benchmark_return'] * 100, 2),
+                                        '夏普值':        round(pm['sharpe'], 2),
+                                        '最大回撤 (%)':   round(pm['max_dd'] * 100, 2),
+                                        '勝率 (%)':       round(pm['win_rate'] * 100, 1),
+                                        '交易次數':       pm['num_trades'],
+                                    })
+                                    sim_rets.append(round(pm['total_return'] * 100, 2))
+                                    sim_bh.append(round(pm['benchmark_return'] * 100, 2))
+                                    sim_tickers.append(display_name)
+                                except Exception:
+                                    continue
+
+                            if sim_rets:
+                                color = bar_colors[sim_idx % len(bar_colors)]
+                                chart_traces.append((sim['name'], sim_tickers, sim_rets, sim_bh, color))
+
+                        if not all_results:
+                            st.error("所有組合計算均失敗，請確認資料下載正常。")
+                        else:
+                            # ── 長條圖 ─────────────────────────────────────
+                            fig_t3 = go.Figure()
+
+                            # 先畫 Buy & Hold（只畫一次，用第一個策略的標的清單）
+                            if chart_traces:
+                                _, bh_tickers, _, bh_vals, _ = chart_traces[0]
+                                fig_t3.add_trace(go.Bar(
+                                    x=bh_tickers, y=bh_vals,
+                                    name='Buy & Hold 基準',
+                                    marker_color='#455a64',
+                                    opacity=0.75
+                                ))
+
+                            for sim_name, stickers, s_rets, _, color in chart_traces:
+                                fig_t3.add_trace(go.Bar(
+                                    x=stickers, y=s_rets,
+                                    name=sim_name,
+                                    marker_color=color
+                                ))
+
+                            fig_t3.update_layout(
+                                title=f"同業策略績效比對 — {mkt_choice} / {sec_choice}（{start_date} ~ {end_date}）",
+                                barmode='group',
+                                template='plotly_dark',
+                                height=460,
+                                margin=dict(l=20, r=20, t=55, b=50),
+                                yaxis_title='累積報酬 (%)',
+                                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+                            )
+                            st.plotly_chart(fig_t3, use_container_width=True)
+
+                            # ── 詳細數據表格 ───────────────────────────────
+                            st.markdown("#### 📋 同業回測績效詳細表")
+                            result_df = pd.DataFrame(all_results)
+
+                            def _color_ret(val):
+                                try:
+                                    v = float(val)
+                                    return 'color: #00e676; font-weight:600' if v > 0 else 'color: #ff1744; font-weight:600'
+                                except:
+                                    return ''
+
+                            styled_t3 = (
+                                result_df.set_index(['策略','標的'])
+                                .style.map(_color_ret, subset=['策略累積報酬 (%)'])
+                                .map(_color_ret, subset=['Buy & Hold (%)'])
+                            )
+                            st.dataframe(styled_t3, use_container_width=True)
+            else:
+                st.info("完成上方策略與標的的選擇後，點擊「執行同業策略比對」開始運算。")
