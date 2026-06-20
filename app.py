@@ -6,6 +6,134 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
 
+factors_list = [
+    "MA Cross", "RSI", "Stochastic KD", "MACD", "Bollinger Bands",
+    "ATR Trend", "ADX", "CCI", "OBV", "Williams %R",
+    "P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"
+]
+
+FACTOR_DISPLAY = {
+    "MA Cross":           "MA Cross 均線交叉",
+    "RSI":                "RSI 相對強弱指數",
+    "Stochastic KD":      "Stochastic KD 隨機震盪指標",
+    "MACD":               "MACD 指數平滑異同移動平均",
+    "Bollinger Bands":    "Bollinger Bands 布林通道",
+    "ATR Trend":          "ATR Trend 真實波幅趨勢",
+    "ADX":                "ADX 平均趨向指數",
+    "CCI":                "CCI 商品通道指數",
+    "OBV":                "OBV 能量潮指標",
+    "Williams %R":        "Williams %R 威廉指標",
+    "P/E Ratio":          "P/E Ratio 本益比",
+    "P/B Ratio":          "P/B Ratio 股價淨值比",
+    "ROE":                "ROE 股東權益報酬率",
+    "Gross Margin":       "Gross Margin 毛利率",
+    "Inventory Turnover": "Inventory Turnover 存貨週轉率",
+}
+
+# 同業標的資料庫 (市場 → 產業 → {代號: 公司名})
+PEER_DB = {
+    "台股": {
+        "半導體製造": {
+            "2330.TW": "台積電",
+            "2303.TW": "聯電",
+            "5347.TWO": "世界先進",
+            "2344.TW": "華邦電",
+            "2408.TW": "南亞科",
+            "3042.TW": "晶技",
+            "2449.TW": "京元電子",
+        },
+        "IC 設計": {
+            "2454.TW": "聯發科",
+            "2379.TW": "瑞昱半導體",
+            "3034.TW": "聯詠科技",
+            "2385.TW": "群光電子",
+            "3443.TW": "創意電子",
+            "4966.TWO": "譜瑞-KY",
+        },
+        "封裝測試": {
+            "3711.TW": "日月光投控",
+            "2325.TW": "矽品精密",
+            "6531.TW": "愛普科技",
+        },
+        "半導體設備/材料": {
+            "3105.TW": "穩懋半導體",
+            "3529.TW": "力旺電子",
+            "6669.TW": "緯穎科技",
+        },
+        "電腦/伺服器": {
+            "2317.TW": "鴻海精密",
+            "2382.TW": "廣達電腦",
+            "2357.TW": "華碩電腦",
+            "2354.TW": "鴻準精密",
+            "3231.TW": "緯創資通",
+        },
+        "通訊/網路": {
+            "2412.TW": "中華電信",
+            "4904.TW": "遠傳",
+            "3045.TW": "台灣大哥大",
+        },
+        "電子零組件": {
+            "2308.TW": "台達電",
+            "2327.TW": "國巨",
+            "2337.TW": "旺宏",
+            "2353.TW": "宏碁",
+        },
+        "金融": {
+            "2882.TW": "國泰金控",
+            "2881.TW": "富邦金控",
+            "2886.TW": "兆豐金控",
+            "2884.TW": "玉山金控",
+            "2891.TW": "中信金控",
+            "2880.TW": "華南金控",
+        },
+        "傳產/化工": {
+            "1301.TW": "台灣塑膠",
+            "1303.TW": "南亞塑膠",
+            "2002.TW": "中國鋼鐵",
+            "1216.TW": "統一企業",
+            "1402.TW": "遠東新",
+        },
+    },
+    "美股": {
+        "半導體": {
+            "TSM":  "台積電 ADR",
+            "NVDA": "輝達 Nvidia",
+            "AMD":  "超微 AMD",
+            "INTC": "英特爾",
+            "ASML": "艾司摩爾",
+            "QCOM": "高通",
+            "AVGO": "博通",
+            "MU":   "美光科技",
+            "AMAT": "應用材料",
+            "LRCX": "科林研發",
+        },
+        "科技": {
+            "AAPL":  "蘋果",
+            "MSFT":  "微軟",
+            "GOOGL": "Alphabet",
+            "META":  "Meta",
+            "AMZN":  "亞馬遜",
+        },
+        "金融": {
+            "JPM": "摩根大通",
+            "BAC": "美國銀行",
+            "GS":  "高盛",
+            "MS":  "摩根史坦利",
+        },
+        "醫療/生技": {
+            "JNJ":  "嬌生",
+            "PFE":  "輝瑞",
+            "MRNA": "莫德納",
+            "ABBV": "艾伯維",
+        },
+        "能源": {
+            "XOM": "埃克森美孚",
+            "CVX": "雪佛龍",
+            "COP": "康菲石油",
+        },
+    },
+}
+
 # ==========================================
 # 1. 頁面配置與主題樣式
 # ==========================================
@@ -704,116 +832,6 @@ transaction_fee = cost_percent / 100.0
 st.sidebar.markdown("---")
 st.sidebar.subheader("⚙️ 因子模式與權重")
 mode = st.sidebar.selectbox("回測模式", ["單一因子", "複合因子"], key="mode")
-
-factors_list = [
-    "MA Cross", "RSI", "Stochastic KD", "MACD", "Bollinger Bands",
-    "ATR Trend", "ADX", "CCI", "OBV", "Williams %R",
-    "P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"
-]
-
-FACTOR_DISPLAY = {
-    "MA Cross":           "MA Cross 均線交叉",
-    "RSI":                "RSI 相對強弱指數",
-    "Stochastic KD":      "Stochastic KD 隨機震盪指標",
-    "MACD":               "MACD 指數平滑異同移動平均",
-    "Bollinger Bands":    "Bollinger Bands 布林通道",
-    "ATR Trend":          "ATR Trend 真實波幅趨勢",
-    "ADX":                "ADX 平均趨向指數",
-    "CCI":                "CCI 商品通道指數",
-    "OBV":                "OBV 能量潮指標",
-    "Williams %R":        "Williams %R 威廉指標",
-    "P/E Ratio":          "P/E Ratio 本益比",
-    "P/B Ratio":          "P/B Ratio 股價淨值比",
-    "ROE":                "ROE 股東權益報酬率",
-    "Gross Margin":       "Gross Margin 毛利率",
-    "Inventory Turnover": "Inventory Turnover 存貨週轉率",
-}
-
-# 同業標的資料庫 (市場 → 產業 → {代號: 公司名})
-PEER_DB = {
-    "台股": {
-        "半導體製造": {
-            "2330.TW": "台積電",
-            "2303.TW": "聯電",
-            "5347.TWO": "世界先進",
-            "2344.TW": "華邦電",
-            "2408.TW": "南亞科",
-        },
-        "IC 設計": {
-            "2454.TW": "聯發科",
-            "2379.TW": "瑞昱半導體",
-            "3034.TW": "聯詠科技",
-            "2385.TW": "群光電子",
-            "3443.TW": "創意電子",
-        },
-        "封裝測試": {
-            "3711.TW": "日月光投控",
-            "2325.TW": "矽品精密",
-            "6531.TW": "愛普科技",
-        },
-        "半導體設備/材料": {
-            "3105.TW": "穩懋半導體",
-            "3529.TW": "力旺電子",
-            "6669.TW": "緯穎科技",
-        },
-        "電子零組件": {
-            "2317.TW": "鴻海精密",
-            "2382.TW": "廣達電腦",
-            "2357.TW": "華碩電腦",
-            "2354.TW": "鴻準精密",
-        },
-        "金融": {
-            "2882.TW": "國泰金控",
-            "2881.TW": "富邦金控",
-            "2886.TW": "兆豐金控",
-            "2884.TW": "玉山金控",
-        },
-        "傳產/化工": {
-            "1301.TW": "台灣塑膠",
-            "1303.TW": "南亞塑膠",
-            "2002.TW": "中國鋼鐵",
-            "1216.TW": "統一企業",
-        },
-    },
-    "美股": {
-        "半導體": {
-            "TSM":  "台積電 ADR",
-            "NVDA": "輝達 Nvidia",
-            "AMD":  "超微 AMD",
-            "INTC": "英特爾",
-            "ASML": "艾司摩爾",
-            "QCOM": "高通",
-            "AVGO": "博通",
-            "MU":   "美光科技",
-            "AMAT": "應用材料",
-            "LRCX": "科林研發",
-        },
-        "科技": {
-            "AAPL":  "蘋果",
-            "MSFT":  "微軟",
-            "GOOGL": "Alphabet",
-            "META":  "Meta",
-            "AMZN":  "亞馬遜",
-        },
-        "金融": {
-            "JPM": "摩根大通",
-            "BAC": "美國銀行",
-            "GS":  "高盛",
-            "MS":  "摩根史坦利",
-        },
-        "醫療/生技": {
-            "JNJ":  "嬌生",
-            "PFE":  "輝瑞",
-            "MRNA": "莫德納",
-            "ABBV": "艾伯維",
-        },
-        "能源": {
-            "XOM": "埃克森美孚",
-            "CVX": "雪佛龍",
-            "COP": "康菲石油",
-        },
-    },
-}
 
 single_factor = ""
 weights = {}
