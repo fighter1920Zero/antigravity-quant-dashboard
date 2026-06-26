@@ -1589,177 +1589,93 @@ def calc_all_signals(df, fundamentals, p=None):
     atr_period = p.get('atr_period', 14)
     adx_period = p.get('adx_period', 14)
     adx_threshold = p.get('adx_threshold', 25)
-    cci_period = p.get('cci_period', 20)
-    cci_oversold = p.get('cci_oversold', -100)
-    cci_overbought = p.get('cci_overbought', 100)
-    obv_ema_period = p.get('obv_ema_period', 20)
-    wr_period = p.get('wr_period', 14)
-    wr_oversold = p.get('wr_oversold', -80)
-    wr_overbought = p.get('wr_overbought', -20)
-
-    signals = {}
-    
-    # 1. MA Cross
-    ma_sig, _, _ = calc_ma_cross(df, ma_fast, ma_slow)
-    signals['MA Cross'] = ma_sig
-    
-    # 2. RSI
-    rsi_sig, _ = calc_rsi(df, rsi_period, rsi_oversold, rsi_overbought)
-    signals['RSI'] = rsi_sig
-    
-    # 3. KD
-    kd_sig, _, _ = calc_kd(df, kd_period, kd_d, kd_oversold, kd_overbought)
-    signals['Stochastic KD'] = kd_sig
-    
-    # 4. MACD
-    macd_sig, _, _, _ = calc_macd(df, macd_fast, macd_slow, macd_signal)
-    signals['MACD'] = macd_sig
-    
-    # 5. BBands
-    bb_sig, _, _, _ = calc_bbands(df, bb_period, bb_std)
-    signals['Bollinger Bands'] = bb_sig
-    
-    # 6. ATR
-    atr_sig, _ = calc_atr(df, atr_period)
-    signals['ATR Trend'] = atr_sig
-    
-    # 7. ADX
-    adx_sig, _ = calc_adx(df, adx_period, adx_threshold)
-    signals['ADX'] = adx_sig
-    
-    # 8. CCI
-    cci_sig, _ = calc_cci(df, cci_period, cci_oversold, cci_overbought)
-    signals['CCI'] = cci_sig
-    
-    # 9. OBV
-    obv_sig, _, _ = calc_obv(df, obv_ema_period)
-    signals['OBV'] = obv_sig
-    
-    # 10. Williams %R
-    wr_sig, _ = calc_williams_r(df, wr_period, wr_oversold, wr_overbought)
-    signals['Williams %R'] = wr_sig
-    
-    # 11. Ichimoku Cloud
-    ichi_conv = p.get('ichi_conv', 9)
-    ichi_base = p.get('ichi_base', 26)
-    signals['Ichimoku Cloud'] = calc_ichimoku(df, ichi_conv, ichi_base)
-    
-    # 12. Parabolic SAR
-    sar_af = p.get('sar_af', 0.02)
-    sar_max = p.get('sar_max', 0.2)
-    signals['Parabolic SAR'] = calc_sar(df, sar_af, sar_max)
-    
-    # 13. EMA Ribbon
-    ema_fast = p.get('ema_fast', 8)
-    ema_mid = p.get('ema_mid', 21)
-    ema_slow = p.get('ema_slow', 55)
-    signals['EMA Ribbon'] = calc_ema_ribbon(df, ema_fast, ema_mid, ema_slow)
-    
-    # 14. Stochastic RSI
-    srsi_p = p.get('srsi_period', 14)
-    srsi_stoch = p.get('srsi_stoch', 3)
-    srsi_ob = p.get('srsi_ob', 0.8)
-    srsi_os = p.get('srsi_os', 0.2)
-    signals['Stochastic RSI'] = calc_stoch_rsi(df, srsi_p, srsi_stoch, srsi_ob, srsi_os)
-    
-    # 15. Donchian Channel
-    don_p = p.get('don_period', 20)
-    signals['Donchian Channel'] = calc_donchian(df, don_p)
-    
-    # 16. MFI
-    mfi_p = p.get('mfi_period', 14)
-    mfi_ob = p.get('mfi_ob', 80)
-    mfi_os = p.get('mfi_os', 20)
-    signals['MFI'] = calc_mfi(df, mfi_p, mfi_ob, mfi_os)
-    
-    # 17. CMF
-    cmf_p = p.get('cmf_period', 20)
-    cmf_thresh = p.get('cmf_thresh', 0.05)
-    signals['CMF'] = calc_cmf(df, cmf_p, cmf_thresh)
-    
-    # 18. Volume Surge
-    vs_p = p.get('vs_period', 20)
-    vs_mult = p.get('vs_mult', 2.0)
-    signals['Volume Surge'] = calc_volume_surge(df, vs_p, vs_mult)
-    
-    # 19. Price ROC
-    roc_p = p.get('roc_period', 20)
-    roc_thresh = p.get('roc_thresh', 3.0)
-    signals['Price ROC'] = calc_price_roc(df, roc_p, roc_thresh)
-    
-    # 20. Elder Ray
-    elder_p = p.get('elder_period', 13)
-    signals['Elder Ray'] = calc_elder_ray(df, elder_p)
-    
-    return signals
-
-def run_backtest(df, positions, transaction_fee=0.0015, initial_capital=100000):
-    close = df['Close']
-    stock_returns = close.pct_change().fillna(0)
-    
-    # 訊號今日產生，明日開盤/收盤執行。這裡採用 shift(1) 代表訊號遞延一天生效
-    delayed_positions = positions.shift(1).fillna(0)
-    
-    # 計算交易點
-    trades = delayed_positions.diff().fillna(0).abs()
-    
-    # 計算策略損益
-    strat_returns = delayed_positions * stock_returns
-    
-    # 扣除手續費/滑價 (每次交易買進或賣出皆扣除特定比率)
-    fee_deductions = trades * transaction_fee
-    net_returns = strat_returns - fee_deductions
-    
-    # 計算權益曲線 (累乘)
-    equity_curve = initial_capital * (1 + net_returns).cumprod()
-    benchmark_curve = initial_capital * (1 + stock_returns).cumprod()
-    
-    # 績效指標計算
-    total_return = (equity_curve.iloc[-1] - initial_capital) / initial_capital
-    benchmark_return = (benchmark_curve.iloc[-1] - initial_capital) / initial_capital
-    
-    # 年化夏普值 (無風險利率設為 1.5%)
-    rf_daily = 0.015 / 252
-    excess_returns = net_returns - rf_daily
-    if excess_returns.std() != 0:
-        sharpe = np.sqrt(252) * (excess_returns.mean() / excess_returns.std())
-    else:
-        sharpe = 0.0
-        
-    # 最大回撤
-    cum_max = equity_curve.cummax()
-    drawdown = (equity_curve - cum_max) / cum_max
-    max_dd = drawdown.min()
-    
-    # 勝率與交易次數 (基於交易部位的進出)
-    win_rate, num_trades = calc_trade_win_rate(close, delayed_positions)
-    
-    return {
-        'equity_curve': equity_curve,
-        'benchmark_curve': benchmark_curve,
-        'net_returns': net_returns,
-        'positions': delayed_positions,
-        'metrics': {
-            'total_return': total_return,
-            'benchmark_return': benchmark_return,
-            'sharpe': sharpe,
-            'max_dd': max_dd,
-            'win_rate': win_rate,
-            'num_trades': num_trades
-        }
+    cci_period = p.get('cci_perioSECTOR_PROFILES = {
+    "半導體製造": {
+        "fundamental_char": "高資本支出、高研發投入與景氣循環性強。產能利用率為獲利關鍵，先進製程業者（如台積電）具備強大定價權與高毛利率，但需注意折舊費用對獲利的影響。",
+        "technical_char": "股價波動較大，易受全球半導體景氣循環及美股費城半導體指數影響。波段趨勢明顯，適合順勢與均線指標，但在景氣轉折點波動劇烈。",
+        "recommended_factors": ["MA Cross (均線交叉)", "MACD (平滑異同移動平均線)", "EMA Ribbon (多週期均線)", "ADX (平均趨向指數)", "Ichimoku Cloud (一目均衡表)"],
+        "not_recommended_factors": ["Williams %R (威廉指標)", "Stochastic RSI (隨機 RSI)", "MFI (資金流量指數)", "CCI (商品通道指數)", "Stochastic KD (隨機指標)"],
+        "outlook": "{company_name}先進製程與AI晶片需求極度暢旺，將帶動營收持續高成長，維持領先地位，長期展望明朗。"
+    },
+    "半導體": {
+        "fundamental_char": "高資本支出與高研發投入，AI與高效能運算需求為核心成長引擎。產業具高度景氣循環與技術壟斷特性，領導廠商利潤豐厚。",
+        "technical_char": "高貝塔（Beta）值，波動度高。股價受全球科技股資金流向與財報指引影響巨大，易形成強烈的多頭或空頭波段趨勢。",
+        "recommended_factors": ["MACD (平滑異同移動平均線)", "Parabolic SAR (停損反轉)", "Price ROC (價格變動率)", "Volume Surge (爆量突破)", "Donchian Channel (唐奇安通道)"],
+        "not_recommended_factors": ["Williams %R (威廉指標)", "Stochastic RSI (隨機 RSI)", "RSI (相對強弱指標)", "Elder Ray (多空力道)", "Stochastic KD (隨機指標)"],
+        "outlook": "{company_name}受惠於AI基礎建設與次世代晶片升級潮，核心技術壁壘高，業績將迎來爆發式成長，前景樂觀。"
+    },
+    "IC 設計": {
+        "fundamental_char": "無晶圓廠（Fabless）輕資產模式，高毛利但研發費用高。極度依賴新產品開發與終端消費性電子（手機、PC）需求，存貨週轉天數為重要指標。",
+        "technical_char": "高 Beta、高彈性，股價對利多與利空反應敏感。極易在短時間內形成爆發性大行情，也容易受題材炒作而劇烈波動。",
+        "recommended_factors": ["Stochastic RSI (隨機 RSI)", "RSI (相對強弱指標)", "Volume Surge (爆量突破)", "Price ROC (價格變動率)", "MFI (資金流量指數)"],
+        "not_recommended_factors": ["MA Cross (均線交叉)", "MACD (平滑異同移動平均線)", "EMA Ribbon (多週期均線)", "Ichimoku Cloud (一目均衡表)", "ADX (平均趨向指數)"],
+        "outlook": "{company_name}受惠消費性電子溫和復甦與AI邊緣運算，產品組合優化，毛利與獲利將重回成長軌道。"
+    },
+    "封裝測試": {
+        "fundamental_char": "半導體中游，屬資本折舊與勞力密集。獲利高度受上游晶圓代工廠產出影響，毛利率相對穩定，折舊占比較高，通常具備穩健的現金流。",
+        "technical_char": "相較於前段晶圓製造或IC設計，股價走勢較為溫和，多呈區間波動或隨產業大盤亦步亦趨，較不易出現極端暴漲暴跌。",
+        "recommended_factors": ["Bollinger Bands (布林通道)", "Stochastic KD (隨機指標)", "RSI (相對強弱指標)", "MFI (資金流量指數)", "CCI (商品通道指數)"],
+        "not_recommended_factors": ["ATR Trend (真實波幅)", "ADX (平均趨向指數)", "Price ROC (價格變動率)", "Volume Surge (爆量突破)", "Parabolic SAR (停損反轉)"],
+        "outlook": "隨先進封裝產能開出與上游晶圓代工滿載，{company_name}訂單能見度高，獲利將呈現穩健成長。"
+    },
+    "半導體設備/材料": {
+        "fundamental_char": "高度集中於少數龍頭，研發週期與認證時間極長。營收深受各大晶圓代工廠資本支出計畫影響，具備高經營槓桿與寡占利潤。",
+        "technical_char": "走勢與全球半導體廠的擴產循環高度連動。股價往往領先產業景氣見底或見頂，呈現高度前瞻與高波動的特徵。",
+        "recommended_factors": ["MA Cross (均線交叉)", "Donchian Channel (唐奇安通道)", "CMF (資金流向指標)", "MACD (平滑異同移動平均線)", "Ichimoku Cloud (一目均衡表)"],
+        "not_recommended_factors": ["Williams %R (威廉指標)", "Stochastic RSI (隨機 RSI)", "RSI (相對強弱指標)", "CCI (商品通道指數)", "Stochastic KD (隨機指標)"],
+        "outlook": "全球晶圓廠在地化建廠與先進製程擴產需求暢旺，{company_name}訂單積壓量大，成長前景極為明確。"
+    },
+    "電腦/伺服器": {
+        "fundamental_char": "屬電子代工組裝（OEM/ODM）中下游，營業毛利率偏低（保三保四），但營收規模巨大。近年受惠於AI伺服器高單價出貨，帶動利潤率與獲利能力改善。",
+        "technical_char": "股價以往走勢沉穩、具高殖利率特性，但近期因AI伺服器題材轉為高波動、高動能特徵，資金聚焦效應顯著。",
+        "recommended_factors": ["MACD (平滑異同移動平均線)", "Volume Surge (爆量突破)", "OBV (能量潮指標)", "CMF (資金流向指標)", "EMA Ribbon (多週期均線)"],
+        "not_recommended_factors": ["Williams %R (威廉指標)", "Stochastic KD (隨機指標)", "CCI (商品通道指數)", "Stochastic RSI (隨機 RSI)", "RSI (相對強弱指標)"],
+        "outlook": "{company_name}受惠AI伺服器出貨量高成長，帶動平均售價與毛利率向上走升，前景十分看好。"
+    },
+    "科技": {
+        "fundamental_char": "具備強大的品牌壁壘、高用戶黏性與龐大的現金流。輕資產與高附加價值，營業利潤率極高，並具備抗禦經濟不景氣的韌性。",
+        "technical_char": "市值巨大、外資法人主要基本持股，走勢常與大盤（S&P 500、Nasdaq）高度重合。長期呈穩定上揚趨勢，波動度相對中等穩健。",
+        "recommended_factors": ["MA Cross (均線交叉)", "MACD (平滑異同移動平均線)", "Ichimoku Cloud (一目均衡表)", "EMA Ribbon (多週期均線)", "Donchian Channel (唐奇安通道)"],
+        "not_recommended_factors": ["Williams %R (威廉指標)", "Stochastic RSI (隨機 RSI)", "CCI (商品通道指數)", "Price ROC (價格變動率)", "Volume Surge (爆量突破)"],
+        "outlook": "{company_name}在雲端、軟體與AI生態系佈局成熟，將持續轉化為穩定高獲利與現金流，長期展望強勁。"
+    },
+    "通訊/網路": {
+        "fundamental_char": "典型電信與寬頻服務業，營收主要來自月租費，客戶黏著度極高，不受景氣影響。資本支出大但折舊固定，具高配息與高現金殖利率特性。",
+        "technical_char": "防禦型類股，貝塔值（Beta）極低，股價平穩，波動範圍極小。主要走勢為除權息填息行情，大盤大跌時具避險防禦屬性。",
+        "recommended_factors": ["Bollinger Bands (布林通道)", "RSI (相對強弱指標)", "Stochastic KD (隨機指標)", "MFI (資金流量指數)", "CCI (商品通道指數)"],
+        "not_recommended_factors": ["ATR Trend (真實波幅)", "ADX (平均趨向指數)", "Price ROC (價格變動率)", "Volume Surge (爆量突破)", "Parabolic SAR (停損反轉)"],
+        "outlook": "{company_name}受惠5G滲透率提升與加值服務成長，現金流與配息穩定，為優質防禦標的。"
+    },
+    "電子零組件": {
+        "fundamental_char": "提供各式被動元件、電源供應器或PCB等零組件，毛利率中等。受下游終端電子產品出貨量以及原料價格影響，景氣波動性顯著。",
+        "technical_char": "走勢與科技製造業大盤高度相關。因單價較低，市場常以庫存回補週期作為買賣時點，股價呈現明顯的週期循環與區間震盪特徵。",
+        "recommended_factors": ["Stochastic KD (隨機指標)", "RSI (相對強弱指標)", "Williams %R (威廉指標)", "Stochastic RSI (隨機 RSI)", "CCI (商品通道指數)"],
+        "not_recommended_factors": ["ADX (平均趨向指數)", "ATR Trend (真實波幅)", "EMA Ribbon (多週期均線)", "Ichimoku Cloud (一目均衡表)", "MA Cross (均線交叉)"],
+        "outlook": "車用電子與AI基礎設施帶動組件升級，{company_name}庫存調整完畢，出貨將重拾成長動能。"
+    },
+    "金融": {
+        "fundamental_char": "受各國央行利率政策、匯率變動及債券市場波動影響巨大。槓桿率高、資本適足率受嚴格管制，獲利以淨利差及投資收益為主，多具有穩定配息能力。",
+        "technical_char": "波動度一般低於科技股，走勢常與市場利率及債券殖利率呈正相關。交易量大、法人持股比重高，極少出現暴漲暴跌，多呈現中長期的區間走勢。",
+        "recommended_factors": ["Bollinger Bands (布林通道)", "MACD (平滑異同移動平均線)", "MA Cross (均線交叉)", "RSI (相對強弱指標)", "CMF (資金流向指標)"],
+        "not_recommended_factors": ["ATR Trend (真實波幅)", "Price ROC (價格變動率)", "Volume Surge (爆量突破)", "Williams %R (威廉指標)", "Stochastic RSI (隨機 RSI)"],
+        "outlook": "利率高檔有利擴大淨利差，{company_name}伴隨股市回暖帶動資產管理利潤，獲利與配息維持穩健。"
+    },
+    "傳產/化工": {
+        "fundamental_char": "傳統重工業或基礎民生工業，資本密集、折舊沉重。獲利深受國際原物料價格（油價、鋼價）與全球總體需求影響，具有極強的週期循環性。",
+        "technical_char": "多頭與空頭波段極長且緩慢，股價在景氣谷底時本益比極高（甚至虧損），股價淨值比低；景氣高峰時本益比極低，適合反向操作。",
+        "recommended_factors": ["MACD (平滑異同移動平均線)", "RSI (相對強弱指標)", "Stochastic KD (隨機指標)", "Bollinger Bands (布林通道)", "MFI (資金流量指數)"],
+        "not_recommended_factors": ["Williams %R (威廉指標)", "Price ROC (價格變動率)", "Volume Surge (爆量突破)", "Stochastic RSI (隨機 RSI)", "ADX (平均趨向指數)"],
+        "outlook": "{company_name}產業獲利觸底回升，營運正迎來溫和復甦。"
     }
+}
 
-def calc_trade_win_rate(close, positions):
-    # 尋找部位變化
-    pos_diff = positions.diff().fillna(0)
-    buys = pos_diff[pos_diff == 1].index
-    sells = pos_diff[pos_diff == -1].index
-    
-    trade_profits = []
-    
-    for buy_date in buys:
-        # 尋找買入後的第一個賣出時間點
-        future_sells = sells[sells > buy_date]
+DEFAULT_PROFILE = {
+    "fundamental_char": "具備一定成長性，受終端客戶拉貨與總體經濟循環影響。",
+    "technical_char": "波動度中等。股價隨市場板塊輪動與法人資金配置而呈波段起伏，適合指標突破或區間震盪交易策略。",
+    "recommended_factors": ["MA Cross (均線交叉)", "MACD (平滑異同移動平均線)", "RSI (相對強弱指標)", "Bollinger Bands (布林通道)", "Volume Surge (爆量突破)"],
+    "not_recommended_factors": ["Williams %R (威廉指標)", "CCI (商品通道指數)", "Stochastic RSI (隨機 RSI)", "ADX (平均趨向指數)", "Elder Ray (多空力道)"],
+    "outlook": "受惠數位轉型與智慧化需求，{company_name}營運將維持穩健，需觀察全球供應鏈庫存調整進度。"
+}uture_sells = sells[sells > buy_date]
         if not future_sells.empty:
             sell_date = future_sells[0]
             buy_price = close.loc[buy_date]
