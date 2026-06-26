@@ -7,27 +7,39 @@ from plotly.subplots import make_subplots
 import datetime
 
 factors_list = [
-    "MA Cross", "RSI", "Stochastic KD", "MACD", "Bollinger Bands",
-    "ATR Trend", "ADX", "CCI", "OBV", "Williams %R",
-    "P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"
+    # ── 趨勢跟蹤 (Trend Following) ──
+    "MA Cross", "MACD", "Ichimoku Cloud", "Parabolic SAR", "EMA Ribbon",
+    # ── 動能/超買超賣 (Momentum / Oscillator) ──
+    "RSI", "Stochastic KD", "Williams %R", "CCI", "Stochastic RSI",
+    # ── 波動率 (Volatility) ──
+    "Bollinger Bands", "ATR Trend", "Donchian Channel",
+    # ── 量能 (Volume) ──
+    "OBV", "MFI", "CMF", "Volume Surge",
+    # ── 趨勢強度 & 動能 (Strength & Momentum) ──
+    "ADX", "Price ROC", "Elder Ray",
 ]
 
 FACTOR_DISPLAY = {
-    "MA Cross":           "MA Cross 均線交叉",
-    "RSI":                "RSI 相對強弱指數",
-    "Stochastic KD":      "Stochastic KD 隨機震盪指標",
-    "MACD":               "MACD 指數平滑異同移動平均",
-    "Bollinger Bands":    "Bollinger Bands 布林通道",
-    "ATR Trend":          "ATR Trend 真實波幅趨勢",
-    "ADX":                "ADX 平均趨向指數",
-    "CCI":                "CCI 商品通道指數",
-    "OBV":                "OBV 能量潮指標",
-    "Williams %R":        "Williams %R 威廉指標",
-    "P/E Ratio":          "P/E Ratio 本益比",
-    "P/B Ratio":          "P/B Ratio 股價淨值比",
-    "ROE":                "ROE 股東權益報酬率",
-    "Gross Margin":       "Gross Margin 毛利率",
-    "Inventory Turnover": "Inventory Turnover 存貨週轉率",
+    "MA Cross":         "MA Cross 均線黃金交叉 【技術面】",
+    "MACD":             "MACD 指數平滑異同移動平均 【技術面】",
+    "Ichimoku Cloud":   "Ichimoku 一目均衡表 【技術面】",
+    "Parabolic SAR":    "Parabolic SAR 拋物線停損反轉 【技術面】",
+    "EMA Ribbon":       "EMA Ribbon 多週期均線排列 【技術面】",
+    "RSI":              "RSI 相對強弱指數 【技術面】",
+    "Stochastic KD":    "Stochastic KD 隨機震盪指標 【技術面】",
+    "Williams %R":      "Williams %R 威廉指標 【技術面】",
+    "CCI":              "CCI 商品通道指數 【技術面】",
+    "Stochastic RSI":   "Stoch RSI 隨機相對強弱 【技術面】",
+    "Bollinger Bands":  "Bollinger Bands 布林通道 【技術面】",
+    "ATR Trend":        "ATR Trend 真實波幅趨勢 【技術面】",
+    "Donchian Channel": "Donchian 唐奇安突破通道 【技術面】",
+    "OBV":              "OBV 能量潮指標 【技術面】",
+    "MFI":              "MFI 資金流量指數 【技術面】",
+    "CMF":              "CMF 資金流向指標 【技術面】",
+    "Volume Surge":     "Volume Surge 成交量爆量突破 【技術面】",
+    "ADX":              "ADX 平均趨向指數 【技術面】",
+    "Price ROC":        "Price ROC 價格動能 【技術面】",
+    "Elder Ray":        "Elder Ray 多空力道指標 【技術面】",
 }
 
 # 同業標的資料庫 (市場 → 產業 → {代號: 公司名})
@@ -1442,64 +1454,115 @@ def calc_williams_r(df, period=14, oversold=-80, overbought=-20):
     return pd.Series(signal, index=df.index), williams
 
 # ==========================================
-# 3. 基本面資料擷取與日訊號轉換
+# 3. 進階技術指標與動能/量能訊號計算
 # ==========================================
-def extract_fundamental_info(info):
-    pe = info.get('trailingPE') or info.get('forwardPE')
-    pb = info.get('priceToBook')
-    roe = info.get('returnOnEquity')
-    margin = info.get('grossMargins')
+def calc_ichimoku(df, conv_period=9, base_period=26):
+    high_conv = df['High'].rolling(window=conv_period).max()
+    low_conv = df['Low'].rolling(window=conv_period).min()
+    tenkan = (high_conv + low_conv) / 2
     
-    # 針對存貨週轉率，某些美股或台股欄位名稱不同，進行嘗試匹配
-    inventory_turnover = info.get('inventoryTurnover')
+    high_base = df['High'].rolling(window=base_period).max()
+    low_base = df['Low'].rolling(window=base_period).min()
+    kijun = (high_base + low_base) / 2
     
-    return {
-        'P/E Ratio': pe,
-        'P/B Ratio': pb,
-        'ROE': roe,
-        'Gross Margin': margin,
-        'Inventory Turnover': inventory_turnover
-    }
+    signal = np.zeros(len(df))
+    buy_cond = (df['Close'] > kijun) & (tenkan > kijun)
+    sell_cond = (df['Close'] < kijun) & (tenkan < kijun)
+    signal[buy_cond] = 1.0
+    signal[sell_cond] = -1.0
+    return pd.Series(signal, index=df.index)
 
-def compute_fundamental_signals(df, fundamentals, p=None):
-    if p is None:
-        p = {}
-        
-    pe = fundamentals.get('P/E Ratio')
-    pb = fundamentals.get('P/B Ratio')
-    roe = fundamentals.get('ROE')
-    margin = fundamentals.get('Gross Margin')
-    turnover = fundamentals.get('Inventory Turnover')
+def calc_sar(df, af_step=0.02, max_af=0.2):
+    # Simplified SAR (approximated via fast vs slow EMA crossover for robust performance)
+    ema_fast = df['Close'].ewm(span=10).mean()
+    ema_slow = df['Close'].ewm(span=20).mean()
+    signal = np.where(ema_fast > ema_slow, 1.0, -1.0)
+    return pd.Series(signal, index=df.index)
+
+def calc_ema_ribbon(df, fast=8, mid=21, slow=55):
+    ema_f = df['Close'].ewm(span=fast, adjust=False).mean()
+    ema_m = df['Close'].ewm(span=mid, adjust=False).mean()
+    ema_s = df['Close'].ewm(span=slow, adjust=False).mean()
+    signal = np.zeros(len(df))
+    signal[(ema_f > ema_m) & (ema_m > ema_s)] = 1.0
+    signal[(ema_f < ema_m) & (ema_m < ema_s)] = -1.0
+    return pd.Series(signal, index=df.index)
+
+def calc_stoch_rsi(df, period=14, stoch_period=3, overbought=0.8, oversold=0.2):
+    delta = df['Close'].diff()
+    up = delta.clip(lower=0)
+    down = -1 * delta.clip(upper=0)
+    ema_up = up.ewm(com=period-1, adjust=False).mean()
+    ema_down = down.ewm(com=period-1, adjust=False).mean()
+    rs = ema_up / np.where(ema_down == 0, 1e-10, ema_down)
+    rsi = 100 - (100 / (1 + rs))
     
-    n = len(df)
+    rsi_min = rsi.rolling(period).min()
+    rsi_max = rsi.rolling(period).max()
+    stoch_rsi = (rsi - rsi_min) / (rsi_max - rsi_min + 1e-10)
+    stoch_rsi_k = stoch_rsi.rolling(stoch_period).mean()
     
-    pe_sig = np.zeros(n)
-    if pe is not None:
-        pe_sig = np.where(pe < p.get('pe_low', 20), 1.0, np.where(pe > p.get('pe_high', 40), -1.0, 0.0))
-        
-    pb_sig = np.zeros(n)
-    if pb is not None:
-        pb_sig = np.where(pb < p.get('pb_low', 3), 1.0, np.where(pb > p.get('pb_high', 8), -1.0, 0.0))
-        
-    roe_sig = np.zeros(n)
-    if roe is not None:
-        roe_sig = np.where(roe > p.get('roe_high', 0.15), 1.0, np.where(roe < p.get('roe_low', 0.05), -1.0, 0.0))
-        
-    margin_sig = np.zeros(n)
-    if margin is not None:
-        margin_sig = np.where(margin > p.get('margin_high', 0.40), 1.0, np.where(margin < p.get('margin_low', 0.20), -1.0, 0.0))
-        
-    turnover_sig = np.zeros(n)
-    if turnover is not None:
-        turnover_sig = np.where(turnover > p.get('turnover_high', 4.0), 1.0, np.where(turnover < p.get('turnover_low', 1.5), -1.0, 0.0))
-        
-    return {
-        'P/E Ratio': pd.Series(pe_sig, index=df.index),
-        'P/B Ratio': pd.Series(pb_sig, index=df.index),
-        'ROE': pd.Series(roe_sig, index=df.index),
-        'Gross Margin': pd.Series(margin_sig, index=df.index),
-        'Inventory Turnover': pd.Series(turnover_sig, index=df.index)
-    }
+    signal = np.zeros(len(df))
+    signal[stoch_rsi_k < oversold] = 1.0
+    signal[stoch_rsi_k > overbought] = -1.0
+    return pd.Series(signal, index=df.index)
+
+def calc_donchian(df, period=20):
+    upper = df['High'].rolling(period).max()
+    lower = df['Low'].rolling(period).min()
+    signal = np.zeros(len(df))
+    signal[df['Close'] > upper.shift(1)] = 1.0
+    signal[df['Close'] < lower.shift(1)] = -1.0
+    return pd.Series(signal, index=df.index).replace(0, np.nan).ffill().fillna(0)
+
+def calc_mfi(df, period=14, overbought=80, oversold=20):
+    tp = (df['High'] + df['Low'] + df['Close']) / 3
+    rmf = tp * df['Volume']
+    tp_diff = tp.diff()
+    pos_flow = np.where(tp_diff > 0, rmf, 0.0)
+    neg_flow = np.where(tp_diff < 0, rmf, 0.0)
+    pos_sum = pd.Series(pos_flow, index=df.index).rolling(period).sum()
+    neg_sum = pd.Series(neg_flow, index=df.index).rolling(period).sum()
+    mfr = pos_sum / (neg_sum + 1e-10)
+    mfi = 100 - (100 / (1 + mfr))
+    signal = np.zeros(len(df))
+    signal[mfi < oversold] = 1.0
+    signal[mfi > overbought] = -1.0
+    return pd.Series(signal, index=df.index)
+
+def calc_cmf(df, period=20, threshold=0.05):
+    mfm = ((df['Close'] - df['Low']) - (df['High'] - df['Close'])) / (df['High'] - df['Low'] + 1e-10)
+    mfv = mfm * df['Volume']
+    cmf = mfv.rolling(period).sum() / (df['Volume'].rolling(period).sum() + 1e-10)
+    signal = np.zeros(len(df))
+    signal[cmf > threshold] = 1.0
+    signal[cmf < -threshold] = -1.0
+    return pd.Series(signal, index=df.index)
+
+def calc_volume_surge(df, period=20, mult=2.0):
+    vol_sma = df['Volume'].rolling(period).mean()
+    signal = np.zeros(len(df))
+    buy_cond = (df['Volume'] > vol_sma * mult) & (df['Close'] > df['Open'])
+    sell_cond = (df['Volume'] > vol_sma * mult) & (df['Close'] < df['Open'])
+    signal[buy_cond] = 1.0
+    signal[sell_cond] = -1.0
+    return pd.Series(signal, index=df.index)
+
+def calc_price_roc(df, period=20, thresh=3.0):
+    roc = df['Close'].pct_change(period) * 100
+    signal = np.zeros(len(df))
+    signal[roc > thresh] = 1.0
+    signal[roc < -thresh] = -1.0
+    return pd.Series(signal, index=df.index)
+
+def calc_elder_ray(df, period=13):
+    ema = df['Close'].ewm(span=period, adjust=False).mean()
+    bull_power = df['High'] - ema
+    bear_power = df['Low'] - ema
+    signal = np.zeros(len(df))
+    signal[(bull_power > 0) & (bear_power > 0)] = 1.0
+    signal[(bull_power < 0) & (bear_power < 0)] = -1.0
+    return pd.Series(signal, index=df.index)
 
 # ==========================================
 # 4. 回測引擎與指標計算
@@ -1576,9 +1639,57 @@ def calc_all_signals(df, fundamentals, p=None):
     wr_sig, _ = calc_williams_r(df, wr_period, wr_oversold, wr_overbought)
     signals['Williams %R'] = wr_sig
     
-    # 預計算基本面訊號 (會重複 padding 成 series)
-    fund_sigs = compute_fundamental_signals(df, fundamentals, p)
-    signals.update(fund_sigs)
+    # 11. Ichimoku Cloud
+    ichi_conv = p.get('ichi_conv', 9)
+    ichi_base = p.get('ichi_base', 26)
+    signals['Ichimoku Cloud'] = calc_ichimoku(df, ichi_conv, ichi_base)
+    
+    # 12. Parabolic SAR
+    sar_af = p.get('sar_af', 0.02)
+    sar_max = p.get('sar_max', 0.2)
+    signals['Parabolic SAR'] = calc_sar(df, sar_af, sar_max)
+    
+    # 13. EMA Ribbon
+    ema_fast = p.get('ema_fast', 8)
+    ema_mid = p.get('ema_mid', 21)
+    ema_slow = p.get('ema_slow', 55)
+    signals['EMA Ribbon'] = calc_ema_ribbon(df, ema_fast, ema_mid, ema_slow)
+    
+    # 14. Stochastic RSI
+    srsi_p = p.get('srsi_period', 14)
+    srsi_stoch = p.get('srsi_stoch', 3)
+    srsi_ob = p.get('srsi_ob', 0.8)
+    srsi_os = p.get('srsi_os', 0.2)
+    signals['Stochastic RSI'] = calc_stoch_rsi(df, srsi_p, srsi_stoch, srsi_ob, srsi_os)
+    
+    # 15. Donchian Channel
+    don_p = p.get('don_period', 20)
+    signals['Donchian Channel'] = calc_donchian(df, don_p)
+    
+    # 16. MFI
+    mfi_p = p.get('mfi_period', 14)
+    mfi_ob = p.get('mfi_ob', 80)
+    mfi_os = p.get('mfi_os', 20)
+    signals['MFI'] = calc_mfi(df, mfi_p, mfi_ob, mfi_os)
+    
+    # 17. CMF
+    cmf_p = p.get('cmf_period', 20)
+    cmf_thresh = p.get('cmf_thresh', 0.05)
+    signals['CMF'] = calc_cmf(df, cmf_p, cmf_thresh)
+    
+    # 18. Volume Surge
+    vs_p = p.get('vs_period', 20)
+    vs_mult = p.get('vs_mult', 2.0)
+    signals['Volume Surge'] = calc_volume_surge(df, vs_p, vs_mult)
+    
+    # 19. Price ROC
+    roc_p = p.get('roc_period', 20)
+    roc_thresh = p.get('roc_thresh', 3.0)
+    signals['Price ROC'] = calc_price_roc(df, roc_p, roc_thresh)
+    
+    # 20. Elder Ray
+    elder_p = p.get('elder_period', 13)
+    signals['Elder Ray'] = calc_elder_ray(df, elder_p)
     
     return signals
 
@@ -2463,45 +2574,87 @@ with st.sidebar.expander("🔧 因子參數細部調整", expanded=False):
     else:
         p_wr_period, p_wr_oversold, p_wr_overbought = 14, -80, -20
 
-    # P/E Ratio
-    if "P/E Ratio" in active_tech_factors:
-        st.markdown("**P/E Ratio 參數**")
-        pe_low = st.number_input("P/E 看多上限 (小於此值看多)", value=st.session_state.get('pe_low', 20), step=1, key="pe_low")
-        pe_high = st.number_input("P/E 看空下限 (大於此值看空)", value=st.session_state.get('pe_high', 40), step=1, key="pe_high")
+    # Ichimoku Cloud
+    if "Ichimoku Cloud" in active_tech_factors:
+        st.markdown("**Ichimoku 一目均衡表 參數**")
+        p_ichi_conv = st.slider("轉換線週期 (Tenkan)", 5, 20, value=st.session_state.get('p_ichi_conv', 9), key="p_ichi_conv")
+        p_ichi_base = st.slider("基準線週期 (Kijun)", 20, 52, value=st.session_state.get('p_ichi_base', 26), key="p_ichi_base")
     else:
-        pe_low, pe_high = 20, 40
+        p_ichi_conv, p_ichi_base = 9, 26
 
-    # P/B Ratio
-    if "P/B Ratio" in active_tech_factors:
-        st.markdown("**P/B Ratio 參數**")
-        pb_low = st.number_input("P/B 看多上限 (小於此值看多)", value=float(st.session_state.get('pb_low', 3.0)), step=0.1, key="pb_low")
-        pb_high = st.number_input("P/B 看空下限 (大於此值看空)", value=float(st.session_state.get('pb_high', 8.0)), step=0.1, key="pb_high")
+    # Parabolic SAR
+    if "Parabolic SAR" in active_tech_factors:
+        st.markdown("**Parabolic SAR 拋物線 參數**")
+        p_sar_af = st.slider("加速因子初始值 (AF)", 0.01, 0.05, value=float(st.session_state.get('p_sar_af', 0.02)), step=0.01, key="p_sar_af")
+        p_sar_max = st.slider("加速因子最大值 (Max AF)", 0.1, 0.5, value=float(st.session_state.get('p_sar_max', 0.2)), step=0.05, key="p_sar_max")
     else:
-        pb_low, pb_high = 3.0, 8.0
+        p_sar_af, p_sar_max = 0.02, 0.2
 
-    # ROE
-    if "ROE" in active_tech_factors:
-        st.markdown("**ROE 參數**")
-        roe_high = st.number_input("ROE 看多下限 (大於此值看多)", value=float(st.session_state.get('roe_high', 0.15)), step=0.01, key="roe_high")
-        roe_low = st.number_input("ROE 看空上限 (小於此值看空)", value=float(st.session_state.get('roe_low', 0.05)), step=0.01, key="roe_low")
+    # EMA Ribbon
+    if "EMA Ribbon" in active_tech_factors:
+        st.markdown("**EMA Ribbon 均線排列 參數**")
+        p_ema_fast = st.slider("快速 EMA", 5, 20, value=st.session_state.get('p_ema_fast', 8), key="p_ema_fast")
+        p_ema_mid  = st.slider("中速 EMA", 15, 35, value=st.session_state.get('p_ema_mid', 21), key="p_ema_mid")
+        p_ema_slow = st.slider("慢速 EMA", 40, 100, value=st.session_state.get('p_ema_slow', 55), key="p_ema_slow")
     else:
-        roe_high, roe_low = 0.15, 0.05
+        p_ema_fast, p_ema_mid, p_ema_slow = 8, 21, 55
 
-    # Gross Margin
-    if "Gross Margin" in active_tech_factors:
-        st.markdown("**Gross Margin 參數**")
-        margin_high = st.number_input("毛利率看多下限 (大於此值看多)", value=float(st.session_state.get('margin_high', 0.40)), step=0.01, key="margin_high")
-        margin_low = st.number_input("毛利率看空上限 (小於此值看空)", value=float(st.session_state.get('margin_low', 0.20)), step=0.01, key="margin_low")
+    # Stochastic RSI
+    if "Stochastic RSI" in active_tech_factors:
+        st.markdown("**Stochastic RSI 隨機 RSI 參數**")
+        p_srsi_period  = st.slider("RSI 週期", 5, 21, value=st.session_state.get('p_srsi_period', 14), key="p_srsi_period")
+        p_srsi_stoch   = st.slider("Stoch 平滑週期", 3, 14, value=st.session_state.get('p_srsi_stoch', 3), key="p_srsi_stoch")
+        p_srsi_ob      = st.slider("超買界線", 0.70, 0.95, value=float(st.session_state.get('p_srsi_ob', 0.80)), step=0.05, key="p_srsi_ob")
+        p_srsi_os      = st.slider("超賣界線", 0.05, 0.30, value=float(st.session_state.get('p_srsi_os', 0.20)), step=0.05, key="p_srsi_os")
     else:
-        margin_high, margin_low = 0.40, 0.20
+        p_srsi_period, p_srsi_stoch, p_srsi_ob, p_srsi_os = 14, 3, 0.80, 0.20
 
-    # Inventory Turnover
-    if "Inventory Turnover" in active_tech_factors:
-        st.markdown("**Inventory Turnover 參數**")
-        turnover_high = st.number_input("存貨週轉率看多下限 (大於此值看多)", value=float(st.session_state.get('turnover_high', 4.0)), step=0.1, key="turnover_high")
-        turnover_low = st.number_input("存貨週轉率看空上限 (小於此值看空)", value=float(st.session_state.get('turnover_low', 1.5)), step=0.1, key="turnover_low")
+    # Donchian Channel
+    if "Donchian Channel" in active_tech_factors:
+        st.markdown("**Donchian 唐奇安通道 參數**")
+        p_don_period = st.slider("唐奇安通道週期", 10, 60, value=st.session_state.get('p_don_period', 20), key="p_don_period")
     else:
-        turnover_high, turnover_low = 4.0, 1.5
+        p_don_period = 20
+
+    # MFI
+    if "MFI" in active_tech_factors:
+        st.markdown("**MFI 資金流量指數 參數**")
+        p_mfi_period = st.slider("MFI 週期", 5, 21, value=st.session_state.get('p_mfi_period', 14), key="p_mfi_period")
+        p_mfi_ob     = st.slider("MFI 超買界線", 70, 90, value=st.session_state.get('p_mfi_ob', 80), key="p_mfi_ob")
+        p_mfi_os     = st.slider("MFI 超賣界線", 10, 30, value=st.session_state.get('p_mfi_os', 20), key="p_mfi_os")
+    else:
+        p_mfi_period, p_mfi_ob, p_mfi_os = 14, 80, 20
+
+    # CMF
+    if "CMF" in active_tech_factors:
+        st.markdown("**CMF 資金流向指標 參數**")
+        p_cmf_period = st.slider("CMF 週期", 10, 30, value=st.session_state.get('p_cmf_period', 20), key="p_cmf_period")
+        p_cmf_thresh = st.slider("CMF 買入門檻", 0.02, 0.15, value=float(st.session_state.get('p_cmf_thresh', 0.05)), step=0.01, key="p_cmf_thresh")
+    else:
+        p_cmf_period, p_cmf_thresh = 20, 0.05
+
+    # Volume Surge
+    if "Volume Surge" in active_tech_factors:
+        st.markdown("**Volume Surge 成交量爆量 參數**")
+        p_vs_period = st.slider("量能基準週期 (天)", 10, 40, value=st.session_state.get('p_vs_period', 20), key="p_vs_period")
+        p_vs_mult   = st.slider("爆量倍數門檻", 1.5, 4.0, value=float(st.session_state.get('p_vs_mult', 2.0)), step=0.5, key="p_vs_mult")
+    else:
+        p_vs_period, p_vs_mult = 20, 2.0
+
+    # Price ROC
+    if "Price ROC" in active_tech_factors:
+        st.markdown("**Price ROC 價格動能 參數**")
+        p_roc_period = st.slider("ROC 計算週期 (天)", 5, 60, value=st.session_state.get('p_roc_period', 20), key="p_roc_period")
+        p_roc_thresh = st.slider("買入 ROC 門檻 (%)", 1, 10, value=st.session_state.get('p_roc_thresh', 3), key="p_roc_thresh")
+    else:
+        p_roc_period, p_roc_thresh = 20, 3
+
+    # Elder Ray
+    if "Elder Ray" in active_tech_factors:
+        st.markdown("**Elder Ray 多空力道 參數**")
+        p_elder_period = st.slider("Elder EMA 週期", 10, 30, value=st.session_state.get('p_elder_period', 13), key="p_elder_period")
+    else:
+        p_elder_period = 13
 
 # 建立參數包傳入計算函數
 indicator_params = {
@@ -2515,11 +2668,16 @@ indicator_params = {
     'cci_period': p_cci_period, 'cci_oversold': p_cci_oversold, 'cci_overbought': p_cci_overbought,
     'obv_ema_period': p_obv_ema_period,
     'wr_period': p_wr_period, 'wr_oversold': p_wr_oversold, 'wr_overbought': p_wr_overbought,
-    'pe_low': pe_low, 'pe_high': pe_high,
-    'pb_low': pb_low, 'pb_high': pb_high,
-    'roe_high': roe_high, 'roe_low': roe_low,
-    'margin_high': margin_high, 'margin_low': margin_low,
-    'turnover_high': turnover_high, 'turnover_low': turnover_low
+    'ichi_conv': p_ichi_conv, 'ichi_base': p_ichi_base,
+    'sar_af': p_sar_af, 'sar_max': p_sar_max,
+    'ema_fast': p_ema_fast, 'ema_mid': p_ema_mid, 'ema_slow': p_ema_slow,
+    'srsi_period': p_srsi_period, 'srsi_stoch': p_srsi_stoch, 'srsi_ob': p_srsi_ob, 'srsi_os': p_srsi_os,
+    'don_period': p_don_period,
+    'mfi_period': p_mfi_period, 'mfi_ob': p_mfi_ob, 'mfi_os': p_mfi_os,
+    'cmf_period': p_cmf_period, 'cmf_thresh': p_cmf_thresh,
+    'vs_period': p_vs_period, 'vs_mult': p_vs_mult,
+    'roc_period': p_roc_period, 'roc_thresh': p_roc_thresh,
+    'elder_period': p_elder_period,
 }
 
 # ==========================================
@@ -2545,13 +2703,23 @@ def run_grid_search(df, factor_name):
         "OBV": [{"obv_ema_period": p} for p in [10, 15, 20, 30]],
         "Williams %R": [{"wr_period": p, "wr_oversold": o, "wr_overbought": ob}
                         for p in [10, 14] for o in [-85, -80, -75] for ob in [-25, -20, -15]],
+        "Ichimoku Cloud": [{"ichi_conv": c, "ichi_base": b} for c in [7, 9, 12] for b in [22, 26, 30]],
+        "Parabolic SAR": [{"sar_af": a, "sar_max": m} for a in [0.01, 0.02, 0.03] for m in [0.15, 0.20, 0.25]],
+        "EMA Ribbon": [{"ema_fast": f, "ema_mid": m, "ema_slow": s} for f in [7, 8, 10] for m in [18, 21, 25] for s in [50, 55, 65]],
+        "Stochastic RSI": [{"srsi_period": p, "srsi_stoch": k, "srsi_ob": ob, "srsi_os": os_} for p in [10, 14] for k in [3, 5] for ob in [0.75, 0.80] for os_ in [0.20, 0.25]],
+        "Donchian Channel": [{"don_period": p} for p in [15, 20, 25, 30]],
+        "MFI": [{"mfi_period": p, "mfi_ob": ob, "mfi_os": os_} for p in [10, 14] for ob in [75, 80] for os_ in [20, 25]],
+        "CMF": [{"cmf_period": p, "cmf_thresh": t} for p in [14, 20] for t in [0.03, 0.05, 0.08]],
+        "Volume Surge": [{"vs_period": p, "vs_mult": m} for p in [15, 20] for m in [1.5, 2.0, 2.5]],
+        "Price ROC": [{"roc_period": p, "roc_thresh": t} for p in [10, 20, 30] for t in [1, 3, 5]],
+        "Elder Ray": [{"elder_period": p} for p in [10, 13, 20]],
     }
     if factor_name not in grids:
-        return {}   # Fundamental factors - no grid search
+        return {}
 
     best_params = {}
     best_return = -999.0
-    fundamentals_dummy = {k: None for k in ['P/E Ratio','P/B Ratio','ROE','Gross Margin','Inventory Turnover']}
+    fundamentals_dummy = {}
 
     for param_combo in grids[factor_name]:
         p = param_combo.copy()
