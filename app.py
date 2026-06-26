@@ -1758,6 +1758,56 @@ DEFAULT_PROFILE = {
     "outlook": "受惠數位轉型與智慧化需求，{company_name}營運將維持穩健，需觀察全球供應鏈庫存調整進度。"
 }
 
+def fetch_twse_fundamentals(ticker):
+    """
+    使用台灣證券交易所 (TWSE) 官方開放 API 取得台股本益比 (P/E) 與股價淨值比 (P/B)。
+    資料格式：[證券代號, 證券名稱, 收盤價, 殖利率, 股利年度, 本益比, 股價淨值比, 財報年/季]
+    適用於 TWSE 上市股票（代號格式：XXXX.TW）。
+    """
+    import requests
+    import datetime
+
+    # 僅適用於台股上市 (.TW 結尾)
+    if not ticker.endswith(".TW"):
+        return {}
+
+    stock_no = ticker.replace(".TW", "")
+    today_str = datetime.date.today().strftime("%Y%m%d")
+
+    url = f"https://www.twse.com.tw/exchangeReport/BWIBBU_d?response=json&date={today_str}&stockNo={stock_no}"
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        if r.status_code != 200:
+            return {}
+        data = r.json()
+        if data.get("stat") != "OK" or not data.get("data"):
+            return {}
+
+        # 找到對應代號的列
+        result_row = None
+        for row in data["data"]:
+            if row[0] == stock_no:
+                result_row = row
+                break
+
+        if not result_row:
+            return {}
+
+        # Fields: [代號, 名稱, 收盤價, 殖利率(%), 股利年度, 本益比, 股價淨值比, 財報年/季]
+        pe_str = result_row[5]
+        pb_str = result_row[6]
+
+        pe = float(pe_str) if pe_str and pe_str not in ["-", ""] else None
+        pb = float(pb_str) if pb_str and pb_str not in ["-", ""] else None
+
+        return {
+            "trailingPE":  pe,
+            "priceToBook": pb,
+            "_source": "TWSE"
+        }
+    except Exception:
+        return {}
+
 # ==========================================
 # 5. 資料快取下載與 API 備援機制
 # ==========================================
@@ -1868,17 +1918,31 @@ def fetch_stock_data(ticker, start_date, end_date):
     if df is None or df.empty:
         return None, None, f"下載發生錯誤：無法取得 {ticker} 的價格資料，請確認代碼是否正確（台股請加 .TW）。"
 
+    # ── 基本面資料：三層備援策略 ──
     info = {}
+
+    # 第一層：嘗試 yfinance
     try:
         t = yf.Ticker(ticker)
         info = t.info or {}
     except Exception:
         info = {}
 
-    if not info or ('trailingPE' not in info and 'priceToBook' not in info):
+    # 第二層：若 yfinance 缺乏關鍵數據，改用 Yahoo query2 隱藏 API
+    if not info.get("trailingPE") and not info.get("priceToBook"):
         fallback_info = fetch_yahoo_fundamentals_fallback(ticker)
         if fallback_info:
-            info.update(fallback_info)
+            info.update({k: v for k, v in fallback_info.items() if v is not None})
+
+    # 第三層 (台股專屬)：使用 TWSE 官方開放 API 補足 P/E 和 P/B
+    if ticker.endswith(".TW") and (not info.get("trailingPE") or not info.get("priceToBook")):
+        twse_data = fetch_twse_fundamentals(ticker)
+        if twse_data:
+            # 僅用 TWSE 填補缺失的欄位，不覆蓋已有的數據
+            if twse_data.get("trailingPE") and not info.get("trailingPE"):
+                info["trailingPE"] = twse_data["trailingPE"]
+            if twse_data.get("priceToBook") and not info.get("priceToBook"):
+                info["priceToBook"] = twse_data["priceToBook"]
 
     return df, info, None
 
