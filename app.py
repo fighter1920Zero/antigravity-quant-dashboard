@@ -1589,7 +1589,199 @@ def calc_all_signals(df, fundamentals, p=None):
     atr_period = p.get('atr_period', 14)
     adx_period = p.get('adx_period', 14)
     adx_threshold = p.get('adx_threshold', 25)
-    cci_period = p.get('cci_perioSECTOR_PROFILES = {
+    cci_period = p.get('cci_period', 20)
+    cci_oversold = p.get('cci_oversold', -100)
+    cci_overbought = p.get('cci_overbought', 100)
+    obv_ema_period = p.get('obv_ema_period', 20)
+    wr_period = p.get('wr_period', 14)
+    wr_oversold = p.get('wr_oversold', -80)
+    wr_overbought = p.get('wr_overbought', -20)
+
+    signals = {}
+    
+    # 1. MA Cross
+    ma_sig, _, _ = calc_ma_cross(df, ma_fast, ma_slow)
+    signals['MA Cross'] = ma_sig
+    
+    # 2. RSI
+    rsi_sig, _ = calc_rsi(df, rsi_period, rsi_oversold, rsi_overbought)
+    signals['RSI'] = rsi_sig
+    
+    # 3. KD
+    kd_sig, _, _ = calc_kd(df, kd_period, kd_d, kd_oversold, kd_overbought)
+    signals['Stochastic KD'] = kd_sig
+    
+    # 4. MACD
+    macd_sig, _, _, _ = calc_macd(df, macd_fast, macd_slow, macd_signal)
+    signals['MACD'] = macd_sig
+    
+    # 5. BBands
+    bb_sig, _, _, _ = calc_bbands(df, bb_period, bb_std)
+    signals['Bollinger Bands'] = bb_sig
+    
+    # 6. ATR
+    atr_sig, _ = calc_atr(df, atr_period)
+    signals['ATR Trend'] = atr_sig
+    
+    # 7. ADX
+    adx_sig, _ = calc_adx(df, adx_period, adx_threshold)
+    signals['ADX'] = adx_sig
+    
+    # 8. CCI
+    cci_sig, _ = calc_cci(df, cci_period, cci_oversold, cci_overbought)
+    signals['CCI'] = cci_sig
+    
+    # 9. OBV
+    obv_sig, _, _ = calc_obv(df, obv_ema_period)
+    signals['OBV'] = obv_sig
+    
+    # 10. Williams %R
+    wr_sig, _ = calc_williams_r(df, wr_period, wr_oversold, wr_overbought)
+    signals['Williams %R'] = wr_sig
+    
+    # 11. Ichimoku Cloud
+    ichi_conv = p.get('ichi_conv', 9)
+    ichi_base = p.get('ichi_base', 26)
+    signals['Ichimoku Cloud'] = calc_ichimoku(df, ichi_conv, ichi_base)
+    
+    # 12. Parabolic SAR
+    sar_af = p.get('sar_af', 0.02)
+    sar_max = p.get('sar_max', 0.2)
+    signals['Parabolic SAR'] = calc_sar(df, sar_af, sar_max)
+    
+    # 13. EMA Ribbon
+    ema_fast = p.get('ema_fast', 8)
+    ema_mid = p.get('ema_mid', 21)
+    ema_slow = p.get('ema_slow', 55)
+    signals['EMA Ribbon'] = calc_ema_ribbon(df, ema_fast, ema_mid, ema_slow)
+    
+    # 14. Stochastic RSI
+    srsi_p = p.get('srsi_period', 14)
+    srsi_stoch = p.get('srsi_stoch', 3)
+    srsi_ob = p.get('srsi_ob', 0.8)
+    srsi_os = p.get('srsi_os', 0.2)
+    signals['Stochastic RSI'] = calc_stoch_rsi(df, srsi_p, srsi_stoch, srsi_ob, srsi_os)
+    
+    # 15. Donchian Channel
+    don_p = p.get('don_period', 20)
+    signals['Donchian Channel'] = calc_donchian(df, don_p)
+    
+    # 16. MFI
+    mfi_p = p.get('mfi_period', 14)
+    mfi_ob = p.get('mfi_ob', 80)
+    mfi_os = p.get('mfi_os', 20)
+    signals['MFI'] = calc_mfi(df, mfi_p, mfi_ob, mfi_os)
+    
+    # 17. CMF
+    cmf_p = p.get('cmf_period', 20)
+    cmf_thresh = p.get('cmf_thresh', 0.05)
+    signals['CMF'] = calc_cmf(df, cmf_p, cmf_thresh)
+    
+    # 18. Volume Surge
+    vs_p = p.get('vs_period', 20)
+    vs_mult = p.get('vs_mult', 2.0)
+    signals['Volume Surge'] = calc_volume_surge(df, vs_p, vs_mult)
+    
+    # 19. Price ROC
+    roc_p = p.get('roc_period', 20)
+    roc_thresh = p.get('roc_thresh', 3.0)
+    signals['Price ROC'] = calc_price_roc(df, roc_p, roc_thresh)
+    
+    # 20. Elder Ray
+    elder_p = p.get('elder_period', 13)
+    signals['Elder Ray'] = calc_elder_ray(df, elder_p)
+    
+    return signals
+
+def run_backtest(df, positions, transaction_fee=0.0015, initial_capital=100000):
+    close = df['Close']
+    stock_returns = close.pct_change().fillna(0)
+    
+    # 訊號今日產生，明日開盤/收盤執行。這裡採用 shift(1) 代表訊號遞延一天生效
+    delayed_positions = positions.shift(1).fillna(0)
+    
+    # 計算交易點
+    trades = delayed_positions.diff().fillna(0).abs()
+    
+    # 計算策略損益
+    strat_returns = delayed_positions * stock_returns
+    
+    # 扣除手續費/滑價 (每次交易買進或賣出皆扣除特定比率)
+    fee_deductions = trades * transaction_fee
+    net_returns = strat_returns - fee_deductions
+    
+    # 計算權益曲線 (累乘)
+    equity_curve = initial_capital * (1 + net_returns).cumprod()
+    benchmark_curve = initial_capital * (1 + stock_returns).cumprod()
+    
+    # 績效指標計算
+    total_return = (equity_curve.iloc[-1] - initial_capital) / initial_capital
+    benchmark_return = (benchmark_curve.iloc[-1] - initial_capital) / initial_capital
+    
+    # 年化夏普值 (無風險利率設為 1.5%)
+    rf_daily = 0.015 / 252
+    excess_returns = net_returns - rf_daily
+    if excess_returns.std() != 0:
+        sharpe = np.sqrt(252) * (excess_returns.mean() / excess_returns.std())
+    else:
+        sharpe = 0.0
+        
+    # 最大回撤
+    cum_max = equity_curve.cummax()
+    drawdown = (equity_curve - cum_max) / cum_max
+    max_dd = drawdown.min()
+    
+    # 勝率與交易次數 (基於交易部位的進出)
+    win_rate, num_trades = calc_trade_win_rate(close, delayed_positions)
+    
+    return {
+        'equity_curve': equity_curve,
+        'benchmark_curve': benchmark_curve,
+        'net_returns': net_returns,
+        'positions': delayed_positions,
+        'metrics': {
+            'total_return': total_return,
+            'benchmark_return': benchmark_return,
+            'sharpe': sharpe,
+            'max_dd': max_dd,
+            'win_rate': win_rate,
+            'num_trades': num_trades
+        }
+    }
+
+def calc_trade_win_rate(close, positions):
+    # 尋找部位變化
+    pos_diff = positions.diff().fillna(0)
+    buys = pos_diff[pos_diff == 1].index
+    sells = pos_diff[pos_diff == -1].index
+    
+    trade_profits = []
+    
+    for buy_date in buys:
+        # 尋找買入後的第一個賣出時間點
+        future_sells = sells[sells > buy_date]
+        if not future_sells.empty:
+            sell_date = future_sells[0]
+            buy_price = close.loc[buy_date]
+            sell_price = close.loc[sell_date]
+            trade_profits.append((sell_price - buy_price) / buy_price)
+        else:
+            # 若部位仍未平倉，以回測終止日收盤價計
+            buy_price = close.loc[buy_date]
+            sell_price = close.iloc[-1]
+            trade_profits.append((sell_price - buy_price) / buy_price)
+            
+    if len(trade_profits) == 0:
+        return 0.0, 0
+        
+    wins = sum(1 for p in trade_profits if p > 0)
+    win_rate = wins / len(trade_profits)
+    return win_rate, len(trade_profits)
+
+# ==========================================
+# 4.4. 標的產業特性與因子指引定義與渲染
+# ==========================================
+SECTOR_PROFILES = {
     "半導體製造": {
         "fundamental_char": "高資本支出、高研發投入與景氣循環性強。產能利用率為獲利關鍵，先進製程業者（如台積電）具備強大定價權與高毛利率，但需注意折舊費用對獲利的影響。",
         "technical_char": "股價波動較大，易受全球半導體景氣循環及美股費城半導體指數影響。波段趨勢明顯，適合順勢與均線指標，但在景氣轉折點波動劇烈。",
