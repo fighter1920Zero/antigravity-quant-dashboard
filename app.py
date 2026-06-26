@@ -1746,7 +1746,7 @@ SECTOR_PROFILES = {
         "technical_char": "多頭與空頭波段極長且緩慢，股價在景氣谷底時本益比極高（甚至虧損），股價淨值比低；景氣高峰時本益比極低，適合反向操作。",
         "recommended_factors": ["P/B Ratio (股價淨值比)", "MACD (平滑異同移動平均線)", "RSI (相對強弱指標)"],
         "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "Gross Margin (毛利率)", "Williams %R (威廉指標)"],
-        "outlook": "全球基礎建設復甦及原物料價格支撐，{company_name}產業獲利觸底回升，營運正迎來溫和復甦。"
+        "outlook": "{company_name}產業獲利觸底回升，營運正迎來溫和復甦。"
     }
 }
 
@@ -1757,6 +1757,130 @@ DEFAULT_PROFILE = {
     "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "Williams %R (威廉指標)", "CCI (順勢指標)"],
     "outlook": "受惠數位轉型與智慧化需求，{company_name}營運將維持穩健，需觀察全球供應鏈庫存調整進度。"
 }
+
+# ==========================================
+# 5. 資料快取下載與 API 備援機制
+# ==========================================
+def fetch_yahoo_fundamentals_fallback(ticker):
+    """Directly fetch fundamentals from Yahoo's hidden query2 API if yfinance fails."""
+    import requests
+    import random
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    ]
+    url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=defaultKeyStatistics,financialData,summaryDetail"
+    try:
+        r = requests.get(url, headers={
+            "User-Agent": random.choice(user_agents),
+            "Accept": "application/json",
+            "Referer": "https://finance.yahoo.com/"
+        }, timeout=8)
+        if r.status_code == 200:
+            res = r.json().get("quoteSummary", {}).get("result", [])
+            if res:
+                r_data = res[0]
+                return {
+                    "trailingPE":        r_data.get("summaryDetail", {}).get("trailingPE", {}).get("raw"),
+                    "priceToBook":       r_data.get("defaultKeyStatistics", {}).get("priceToBook", {}).get("raw"),
+                    "returnOnEquity":    r_data.get("financialData", {}).get("returnOnEquity", {}).get("raw"),
+                    "grossMargins":      r_data.get("financialData", {}).get("grossMargins", {}).get("raw"),
+                    "inventoryTurnover": r_data.get("defaultKeyStatistics", {}).get("inventoryTurnover", {}).get("raw"),
+                    "longName":          r_data.get("summaryDetail", {}).get("currency"),
+                }
+    except Exception:
+        pass
+    return {}
+
+def _direct_yahoo_ohlcv(ticker, start_date, end_date):
+    """直接呼叫 Yahoo Finance Chart API (v8) 取得 OHLCV，繞過 yfinance 模組限制。"""
+    import requests
+    import random
+    import time as _time
+    import datetime as _dt
+
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    ]
+
+    if isinstance(start_date, str):
+        start_date = _dt.date.fromisoformat(start_date)
+    if isinstance(end_date, str):
+        end_date = _dt.date.fromisoformat(end_date)
+    p1 = int(_dt.datetime.combine(start_date, _dt.time.min).timestamp())
+    p2 = int(_dt.datetime.combine(end_date,   _dt.time.min).timestamp())
+
+    for base in ["query1", "query2"]:
+        url = (
+            f"https://{base}.finance.yahoo.com/v8/finance/chart/{ticker}"
+            f"?interval=1d&period1={p1}&period2={p2}&events=history"
+        )
+        headers = {
+            "User-Agent": random.choice(user_agents),
+            "Accept": "application/json",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://finance.yahoo.com/",
+        }
+        for attempt in range(3):
+            try:
+                resp = requests.get(url, headers=headers, timeout=12)
+                if resp.status_code == 429:
+                    _time.sleep((attempt + 1) * 4)
+                    continue
+                if resp.status_code != 200:
+                    break
+                data = resp.json()
+                chart = data.get("chart", {}).get("result", [])
+                if not chart:
+                    break
+                c = chart[0]
+                timestamps = c.get("timestamp", [])
+                ohlcv = c.get("indicators", {}).get("quote", [{}])[0]
+                adjclose_list = c.get("indicators", {}).get("adjclose", [{}])
+                adjclose = adjclose_list[0].get("adjclose", []) if adjclose_list else []
+
+                dates = [_dt.datetime.fromtimestamp(ts).date() for ts in timestamps]
+                df = pd.DataFrame({
+                    "Open":      ohlcv.get("open",   []),
+                    "High":      ohlcv.get("high",   []),
+                    "Low":       ohlcv.get("low",    []),
+                    "Close":     ohlcv.get("close",  []),
+                    "Volume":    ohlcv.get("volume", []),
+                    "Adj Close": adjclose if adjclose else ohlcv.get("close", []),
+                }, index=pd.to_datetime(dates))
+                df.index.name = "Date"
+                df = df.dropna(subset=["Close"])
+                if not df.empty:
+                    return df.sort_index()
+            except Exception:
+                _time.sleep((attempt + 1) * 2)
+    return None
+
+@st.cache_data(ttl=3600)
+def fetch_stock_data(ticker, start_date, end_date):
+    import time
+    df = _direct_yahoo_ohlcv(ticker, start_date, end_date)
+
+    if df is None or df.empty:
+        return None, None, f"下載發生錯誤：無法取得 {ticker} 的價格資料，請確認代碼是否正確（台股請加 .TW）。"
+
+    info = {}
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+    except Exception:
+        info = {}
+
+    if not info or ('trailingPE' not in info and 'priceToBook' not in info):
+        fallback_info = fetch_yahoo_fundamentals_fallback(ticker)
+        if fallback_info:
+            info.update(fallback_info)
+
+    return df, info, None
 
 def render_stock_industry_guidelines(ticker, info):
     # 1. 取得公司中文名稱與產業類別
@@ -1993,100 +2117,6 @@ def plot_monthly_returns(net_returns):
     )
     return fig
 
-# ==========================================================
-# 5. 資料快取下載與 API 備援機制
-# ==========================================
-def fetch_yahoo_fundamentals_fallback(ticker):
-    """Directly fetch fundamentals from Yahoo's hidden query2 API if yfinance fails."""
-    import requests
-    import random
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5"
-    ]
-    url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=defaultKeyStatistics,financialData,summaryDetail"
-    try:
-        r = requests.get(url, headers={"User-Agent": random.choice(user_agents)}, timeout=5)
-        if r.status_code == 200:
-            res = r.json().get("quoteSummary", {}).get("result", [])
-            if res:
-                r_data = res[0]
-                return {
-                    "trailingPE": r_data.get("summaryDetail", {}).get("trailingPE", {}).get("raw"),
-                    "priceToBook": r_data.get("defaultKeyStatistics", {}).get("priceToBook", {}).get("raw"),
-                    "returnOnEquity": r_data.get("financialData", {}).get("returnOnEquity", {}).get("raw"),
-                    "grossMargins": r_data.get("financialData", {}).get("grossMargins", {}).get("raw"),
-                    "inventoryTurnover": r_data.get("defaultKeyStatistics", {}).get("inventoryTurnover", {}).get("raw")
-                }
-    except Exception:
-        pass
-    return {}
-
-@st.cache_data(ttl=3600)
-def fetch_stock_data(ticker, start_date, end_date, max_retries=3):
-    import time
-    import requests
-    import random
-    
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    ]
-    
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": random.choice(user_agents),
-        "Accept": "*/*"
-    })
-    
-    df = None
-    last_err_df = None
-    
-    # 1. 抓取股價 (OHLCV)
-    for attempt in range(max_retries):
-        try:
-            df = yf.download(ticker, start=start_date, end=end_date, session=session)
-            break
-        except Exception as e:
-            last_err_df = e
-            err_str = str(e)
-            if "Too Many Requests" in err_str or "Rate limited" in err_str or "429" in err_str:
-                time.sleep((attempt + 1) * 3)  # 更長的退避
-                continue
-            else:
-                return None, None, f"下載發生錯誤: {err_str}"
-                
-    if df is None or df.empty:
-        return None, None, f"下載發生錯誤: 無法取得價格資料 {str(last_err_df)} (已達到最大重試次數)"
-        
-    # 整理 Multi-Index 欄位 (yfinance 某些版本會回傳多重索引)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [col[0] for col in df.columns]
-        
-    df = df.sort_index()
-    
-    # 2. 抓取基本面資訊 (導入強固的備援機制)
-    info = {}
-    for attempt in range(2):
-        try:
-            t = yf.Ticker(ticker, session=session)
-            info = t.info
-            # 檢查是否為空，或缺乏關鍵數據
-            if not info or ('trailingPE' not in info and 'priceToBook' not in info):
-                fallback_info = fetch_yahoo_fundamentals_fallback(ticker)
-                if fallback_info:
-                    info.update(fallback_info)
-            break
-        except Exception:
-            time.sleep(1.5)
-            if attempt == 1:
-                # 最後一次重試失敗，完全改用備用爬蟲
-                info = fetch_yahoo_fundamentals_fallback(ticker)
-            continue
-            
-    return df, info, None
 
 # ==========================================
 # 6. 初始化 Session State 模擬實驗室
@@ -2403,46 +2433,15 @@ def build_trade_log(df, positions, indicator_series, factor_name):
 
 @st.cache_data(ttl=3600)
 def fetch_peer_stock_data(ticker_list, start_date, end_date):
-    """Download OHLCV for a basket of peer stocks."""
+    """Download OHLCV for a basket of peer stocks using direct HTTP Chart API."""
     import time
-    import requests
-    import random
-    
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    ]
-    
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": random.choice(user_agents),
-        "Accept": "*/*"
-    })
-    
     results = {}
     for t in ticker_list:
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                df_peer = yf.download(t, start=start_date, end=end_date, progress=False, session=session)
-                if df_peer.empty:
-                    break
-                if isinstance(df_peer.columns, pd.MultiIndex):
-                    df_peer.columns = [col[0] for col in df_peer.columns]
-                results[t] = df_peer.sort_index()
-                
-                # 休眠一小段時間以避免短時間內發送過多請求
-                time.sleep(1.0) # 加長批次之間的間隔為1秒
-                break
-            except Exception as e:
-                err_str = str(e)
-                if "Too Many Requests" in err_str or "Rate limited" in err_str or "429" in err_str:
-                    time.sleep((attempt + 1) * 3)
-                    continue
-                else:
-                    break
+        df_peer = _direct_yahoo_ohlcv(t, start_date, end_date)
+        if df_peer is not None and not df_peer.empty:
+            results[t] = df_peer
+        # 批次間休眠，避免頻率限制
+        time.sleep(0.8)
     return results
 
 # 對於單一因子模式，自動執行最佳參數網格搜尋
