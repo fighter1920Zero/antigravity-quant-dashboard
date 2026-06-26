@@ -1780,8 +1780,8 @@ SECTOR_PROFILES = {
 DEFAULT_PROFILE = {
     "fundamental_char": "具備一定成長性，受終端客戶拉貨與總體經濟循環影響。需留意獲利能力指標（ROE及毛利率）的變動以及債務比重。",
     "technical_char": "波動度中等。股價隨市場板塊輪動與法人資金配置而呈波段起伏，適合指標突破或區間震盪交易策略。",
-    "recommended_factors": ["ROE (股東權益報酬率)", "MA Cross (均線黃金交叉)", "RSI (相對強弱指標)"],
-    "not_recommended_factors": ["Inventory Turnover (存貨週轉率)", "Williams %R (威廉指標)", "CCI (順勢指標)"],
+    "recommended_factors": ["MA Cross (均線交叉)", "MACD (平滑異同移動平均線)", "RSI (相對強弱指標)", "Bollinger Bands (布林通道)", "Volume Surge (爆量突破)"],
+    "not_recommended_factors": ["Williams %R (威廉指標)", "CCI (商品通道指數)", "Stochastic RSI (隨機 RSI)", "ADX (平均趨向指數)", "Elder Ray (多空力道)"],
     "outlook": "受惠數位轉型與智慧化需求，{company_name}營運將維持穩健，需觀察全球供應鏈庫存調整進度。"
 }
 
