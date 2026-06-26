@@ -1999,10 +1999,18 @@ def plot_monthly_returns(net_returns):
 @st.cache_data(ttl=3600)
 def fetch_stock_data(ticker, start_date, end_date, max_retries=3):
     import time
+    import requests
+    
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+        "Accept": "*/*"
+    })
+    
     last_err = None
     for attempt in range(max_retries):
         try:
-            df = yf.download(ticker, start=start_date, end=end_date)
+            df = yf.download(ticker, start=start_date, end=end_date, session=session)
             if df.empty:
                 return None, None, "下載資料為空，請確認股票代碼或時間範圍。"
             
@@ -2013,7 +2021,7 @@ def fetch_stock_data(ticker, start_date, end_date, max_retries=3):
             df = df.sort_index()
             
             # 嘗試下載基本面資訊
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(ticker, session=session)
             info = t.info
             
             return df, info, None
@@ -2021,7 +2029,7 @@ def fetch_stock_data(ticker, start_date, end_date, max_retries=3):
             last_err = e
             err_str = str(e)
             if "Too Many Requests" in err_str or "Rate limited" in err_str or "429" in err_str:
-                time.sleep(2 ** attempt)  # 指數退避: 1秒, 2秒, 4秒...
+                time.sleep((attempt + 1) * 2)  # 更長的退避: 2s, 4s, 6s...
                 continue
             else:
                 return None, None, f"下載發生錯誤: {err_str}"
@@ -2345,12 +2353,20 @@ def build_trade_log(df, positions, indicator_series, factor_name):
 def fetch_peer_stock_data(ticker_list, start_date, end_date):
     """Download OHLCV for a basket of peer stocks."""
     import time
+    import requests
+    
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+        "Accept": "*/*"
+    })
+    
     results = {}
     for t in ticker_list:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                df_peer = yf.download(t, start=start_date, end=end_date, progress=False)
+                df_peer = yf.download(t, start=start_date, end=end_date, progress=False, session=session)
                 if df_peer.empty:
                     break
                 if isinstance(df_peer.columns, pd.MultiIndex):
@@ -2358,12 +2374,12 @@ def fetch_peer_stock_data(ticker_list, start_date, end_date):
                 results[t] = df_peer.sort_index()
                 
                 # 休眠一小段時間以避免短時間內發送過多請求
-                time.sleep(0.5)
+                time.sleep(1.0) # 加長批次之間的間隔為1秒
                 break
             except Exception as e:
                 err_str = str(e)
                 if "Too Many Requests" in err_str or "Rate limited" in err_str or "429" in err_str:
-                    time.sleep(2 ** attempt)
+                    time.sleep((attempt + 1) * 2)
                     continue
                 else:
                     break
