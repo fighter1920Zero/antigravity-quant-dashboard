@@ -2000,41 +2000,59 @@ def plot_monthly_returns(net_returns):
 def fetch_stock_data(ticker, start_date, end_date, max_retries=3):
     import time
     import requests
+    import random
+    
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    ]
     
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+        "User-Agent": random.choice(user_agents),
         "Accept": "*/*"
     })
     
-    last_err = None
+    df = None
+    last_err_df = None
+    
+    # 1. 抓取股價 (OHLCV)
     for attempt in range(max_retries):
         try:
             df = yf.download(ticker, start=start_date, end=end_date, session=session)
-            if df.empty:
-                return None, None, "下載資料為空，請確認股票代碼或時間範圍。"
-            
-            # 整理 Multi-Index 欄位 (yfinance 某些版本會回傳多重索引)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [col[0] for col in df.columns]
-                
-            df = df.sort_index()
-            
-            # 嘗試下載基本面資訊
-            t = yf.Ticker(ticker, session=session)
-            info = t.info
-            
-            return df, info, None
+            break
         except Exception as e:
-            last_err = e
+            last_err_df = e
             err_str = str(e)
             if "Too Many Requests" in err_str or "Rate limited" in err_str or "429" in err_str:
-                time.sleep((attempt + 1) * 2)  # 更長的退避: 2s, 4s, 6s...
+                time.sleep((attempt + 1) * 3)  # 更長的退避
                 continue
             else:
                 return None, None, f"下載發生錯誤: {err_str}"
                 
-    return None, None, f"下載發生錯誤: {str(last_err)} (已達到最大重試次數)"
+    if df is None or df.empty:
+        return None, None, f"下載發生錯誤: 無法取得價格資料 {str(last_err_df)} (已達到最大重試次數)"
+        
+    # 整理 Multi-Index 欄位 (yfinance 某些版本會回傳多重索引)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] for col in df.columns]
+        
+    df = df.sort_index()
+    
+    # 2. 抓取基本面資訊 (如果失敗，不中斷主流程，允許回傳空字典)
+    info = {}
+    for attempt in range(2):
+        try:
+            t = yf.Ticker(ticker, session=session)
+            info = t.info
+            break
+        except Exception as e:
+            time.sleep(1.5)
+            continue
+            
+    return df, info, None
 
 # ==========================================
 # 6. 初始化 Session State 模擬實驗室
@@ -2354,10 +2372,18 @@ def fetch_peer_stock_data(ticker_list, start_date, end_date):
     """Download OHLCV for a basket of peer stocks."""
     import time
     import requests
+    import random
+    
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+    ]
     
     session = requests.Session()
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+        "User-Agent": random.choice(user_agents),
         "Accept": "*/*"
     })
     
@@ -2379,7 +2405,7 @@ def fetch_peer_stock_data(ticker_list, start_date, end_date):
             except Exception as e:
                 err_str = str(e)
                 if "Too Many Requests" in err_str or "Rate limited" in err_str or "429" in err_str:
-                    time.sleep((attempt + 1) * 2)
+                    time.sleep((attempt + 1) * 3)
                     continue
                 else:
                     break
