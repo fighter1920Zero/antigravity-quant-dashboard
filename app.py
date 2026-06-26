@@ -1843,64 +1843,48 @@ def fetch_yahoo_fundamentals_fallback(ticker):
         pass
     return {}
 
-def _direct_yahoo_ohlcv(ticker, start_date, end_date):
-    """直接呼叫 Yahoo Finance Chart API (v8) 取得 OHLCV，繞過 yfinance 模組限制。"""
-    import requests
-    import random
-    import time as _time
+def _to_date(d):
     import datetime as _dt
+    if isinstance(d, str):
+        return _dt.date.fromisoformat(d)
+    if isinstance(d, _dt.datetime):
+        return d.date()
+    return d
 
-    user_agents = [
+def _try_yahoo_chart(ticker, start_date, end_date):
+    """嘗試 Yahoo Finance Chart API v8（query1 / query2）。"""
+    import requests, random, datetime as _dt, time as _time
+    ua = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
     ]
-
-    if isinstance(start_date, str):
-        start_date = _dt.date.fromisoformat(start_date)
-    if isinstance(end_date, str):
-        end_date = _dt.date.fromisoformat(end_date)
-    p1 = int(_dt.datetime.combine(start_date, _dt.time.min).timestamp())
-    p2 = int(_dt.datetime.combine(end_date,   _dt.time.min).timestamp())
-
+    s = _to_date(start_date)
+    e = _to_date(end_date)
+    p1 = int(_dt.datetime.combine(s, _dt.time.min).timestamp())
+    p2 = int(_dt.datetime.combine(e, _dt.time.min).timestamp())
     for base in ["query1", "query2"]:
-        url = (
-            f"https://{base}.finance.yahoo.com/v8/finance/chart/{ticker}"
-            f"?interval=1d&period1={p1}&period2={p2}&events=history"
-        )
-        headers = {
-            "User-Agent": random.choice(user_agents),
-            "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://finance.yahoo.com/",
-        }
-        for attempt in range(3):
+        url = (f"https://{base}.finance.yahoo.com/v8/finance/chart/{ticker}"
+               f"?interval=1d&period1={p1}&period2={p2}&events=history")
+        for attempt in range(2):
             try:
-                resp = requests.get(url, headers=headers, timeout=12)
+                resp = requests.get(url, headers={"User-Agent": random.choice(ua),
+                    "Accept": "application/json", "Referer": "https://finance.yahoo.com/"}, timeout=10)
                 if resp.status_code == 429:
-                    _time.sleep((attempt + 1) * 4)
-                    continue
-                if resp.status_code != 200:
-                    break
-                data = resp.json()
-                chart = data.get("chart", {}).get("result", [])
-                if not chart:
-                    break
-                c = chart[0]
-                timestamps = c.get("timestamp", [])
-                ohlcv = c.get("indicators", {}).get("quote", [{}])[0]
-                adjclose_list = c.get("indicators", {}).get("adjclose", [{}])
-                adjclose = adjclose_list[0].get("adjclose", []) if adjclose_list else []
-
-                dates = [_dt.datetime.fromtimestamp(ts).date() for ts in timestamps]
+                    _time.sleep((attempt + 1) * 3); continue
+                if resp.status_code != 200: break
+                c = resp.json().get("chart", {}).get("result", [])
+                if not c: break
+                c = c[0]
+                ts = c.get("timestamp", [])
+                q  = c.get("indicators", {}).get("quote", [{}])[0]
+                ac = (c.get("indicators", {}).get("adjclose", [{}]) or [{}])[0].get("adjclose", [])
+                dates = [_dt.datetime.fromtimestamp(t).date() for t in ts]
                 df = pd.DataFrame({
-                    "Open":      ohlcv.get("open",   []),
-                    "High":      ohlcv.get("high",   []),
-                    "Low":       ohlcv.get("low",    []),
-                    "Close":     ohlcv.get("close",  []),
-                    "Volume":    ohlcv.get("volume", []),
-                    "Adj Close": adjclose if adjclose else ohlcv.get("close", []),
+                    "Open": q.get("open", []), "High": q.get("high", []),
+                    "Low":  q.get("low",  []), "Close": q.get("close", []),
+                    "Volume": q.get("volume", []),
+                    "Adj Close": ac if ac else q.get("close", [])
                 }, index=pd.to_datetime(dates))
                 df.index.name = "Date"
                 df = df.dropna(subset=["Close"])
@@ -1908,6 +1892,130 @@ def _direct_yahoo_ohlcv(ticker, start_date, end_date):
                     return df.sort_index()
             except Exception:
                 _time.sleep((attempt + 1) * 2)
+    return None
+
+def _try_stooq(ticker, start_date, end_date):
+    """
+    使用 Stooq (波蘭免費財經資料庫) 下載 OHLCV CSV，完全獨立於 Yahoo Finance。
+    - 台股格式：2330.TW → 2330.tw
+    - 美股格式：AAPL → aapl.us
+    """
+    import requests, io, datetime as _dt
+    s = _to_date(start_date)
+    e = _to_date(end_date)
+    d1 = s.strftime("%Y%m%d")
+    d2 = e.strftime("%Y%m%d")
+
+    # 轉換 ticker 格式
+    if ticker.upper().endswith(".TW"):
+        stooq_sym = ticker.lower()           # 2330.tw
+    elif ticker.upper().endswith(".TWO"):
+        stooq_sym = ticker.lower()           # OTC 股票
+    else:
+        stooq_sym = ticker.lower() + ".us"   # 美股
+
+    url = f"https://stooq.com/q/d/l/?s={stooq_sym}&d1={d1}&d2={d2}&i=d"
+    try:
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        if resp.status_code != 200 or "No data" in resp.text or len(resp.text) < 50:
+            return None
+        df = pd.read_csv(io.StringIO(resp.text), parse_dates=["Date"], index_col="Date")
+        df = df.dropna(subset=["Close"])
+        if df.empty:
+            return None
+        # 確保欄位一致
+        if "Adj Close" not in df.columns:
+            df["Adj Close"] = df["Close"]
+        return df.sort_index()
+    except Exception:
+        return None
+
+def _try_twse_price(ticker, start_date, end_date):
+    """
+    使用台灣證交所 (TWSE) 官方逐月股價 API 取得台股歷史 OHLCV。
+    每次請求一個月的資料，適用 XXXX.TW 格式。
+    """
+    import requests, datetime as _dt, time as _time
+
+    if not ticker.endswith(".TW"):
+        return None
+
+    stock_no = ticker.replace(".TW", "")
+    s = _to_date(start_date)
+    e = _to_date(end_date)
+
+    all_rows = []
+    cur = _dt.date(s.year, s.month, 1)
+    while cur <= e:
+        ym = cur.strftime("%Y%m%d")
+        url = f"https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date={ym}&stockNo={stock_no}"
+        try:
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("stat") == "OK" and data.get("data"):
+                    # 欄位: [日期, 成交股數, 成交金額, 開盤價, 最高價, 最低價, 收盤價, 漲跌價差, 成交筆數]
+                    for row in data["data"]:
+                        try:
+                            date_parts = row[0].split("/")
+                            year = int(date_parts[0]) + 1911  # 民國轉西元
+                            month = int(date_parts[1])
+                            day = int(date_parts[2])
+                            dt = _dt.date(year, month, day)
+                            if dt < s or dt > e:
+                                continue
+                            def _parse(s):
+                                return float(s.replace(",", "").replace("--", "nan"))
+                            all_rows.append({
+                                "Date":      pd.Timestamp(dt),
+                                "Open":      _parse(row[3]),
+                                "High":      _parse(row[4]),
+                                "Low":       _parse(row[5]),
+                                "Close":     _parse(row[6]),
+                                "Volume":    float(row[1].replace(",", "")),
+                                "Adj Close": _parse(row[6])
+                            })
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+        # 進入下個月
+        if cur.month == 12:
+            cur = _dt.date(cur.year + 1, 1, 1)
+        else:
+            cur = _dt.date(cur.year, cur.month + 1, 1)
+        _time.sleep(0.4)  # 避免過快請求 TWSE
+
+    if not all_rows:
+        return None
+    df = pd.DataFrame(all_rows).set_index("Date")
+    df.index.name = "Date"
+    df = df.dropna(subset=["Close"])
+    return df.sort_index() if not df.empty else None
+
+def _direct_yahoo_ohlcv(ticker, start_date, end_date):
+    """
+    多源備援股價抓取引擎（三層）：
+    1. Yahoo Finance Chart API v8
+    2. Stooq 免費 CSV（完全獨立於 Yahoo Finance）
+    3. TWSE 官方逐月股價 API（台股專屬）
+    """
+    # 第一層：Yahoo Finance Chart API
+    df = _try_yahoo_chart(ticker, start_date, end_date)
+    if df is not None and not df.empty:
+        return df
+
+    # 第二層：Stooq（完全獨立的免費數據源）
+    df = _try_stooq(ticker, start_date, end_date)
+    if df is not None and not df.empty:
+        return df
+
+    # 第三層：TWSE 官方股價 API（台股專屬）
+    if ticker.upper().endswith(".TW"):
+        df = _try_twse_price(ticker, start_date, end_date)
+        if df is not None and not df.empty:
+            return df
+
     return None
 
 @st.cache_data(ttl=3600)
