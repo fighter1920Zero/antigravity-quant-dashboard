@@ -1997,25 +1997,36 @@ def plot_monthly_returns(net_returns):
 # 5. 資料快取下載
 # ==========================================
 @st.cache_data(ttl=3600)
-def fetch_stock_data(ticker, start_date, end_date):
-    try:
-        df = yf.download(ticker, start=start_date, end=end_date)
-        if df.empty:
-            return None, None, "下載資料為空，請確認股票代碼或時間範圍。"
-        
-        # 整理 Multi-Index 欄位 (yfinance 某些版本會回傳多重索引)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [col[0] for col in df.columns]
+def fetch_stock_data(ticker, start_date, end_date, max_retries=3):
+    import time
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            df = yf.download(ticker, start=start_date, end=end_date)
+            if df.empty:
+                return None, None, "下載資料為空，請確認股票代碼或時間範圍。"
             
-        df = df.sort_index()
-        
-        # 嘗試下載基本面資訊
-        t = yf.Ticker(ticker)
-        info = t.info
-        
-        return df, info, None
-    except Exception as e:
-        return None, None, f"下載發生錯誤: {str(e)}"
+            # 整理 Multi-Index 欄位 (yfinance 某些版本會回傳多重索引)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [col[0] for col in df.columns]
+                
+            df = df.sort_index()
+            
+            # 嘗試下載基本面資訊
+            t = yf.Ticker(ticker)
+            info = t.info
+            
+            return df, info, None
+        except Exception as e:
+            last_err = e
+            err_str = str(e)
+            if "Too Many Requests" in err_str or "Rate limited" in err_str or "429" in err_str:
+                time.sleep(2 ** attempt)  # 指數退避: 1秒, 2秒, 4秒...
+                continue
+            else:
+                return None, None, f"下載發生錯誤: {err_str}"
+                
+    return None, None, f"下載發生錯誤: {str(last_err)} (已達到最大重試次數)"
 
 # ==========================================
 # 6. 初始化 Session State 模擬實驗室
@@ -2333,17 +2344,29 @@ def build_trade_log(df, positions, indicator_series, factor_name):
 @st.cache_data(ttl=3600)
 def fetch_peer_stock_data(ticker_list, start_date, end_date):
     """Download OHLCV for a basket of peer stocks."""
+    import time
     results = {}
     for t in ticker_list:
-        try:
-            df_peer = yf.download(t, start=start_date, end=end_date, progress=False)
-            if df_peer.empty:
-                continue
-            if isinstance(df_peer.columns, pd.MultiIndex):
-                df_peer.columns = [col[0] for col in df_peer.columns]
-            results[t] = df_peer.sort_index()
-        except Exception:
-            continue
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                df_peer = yf.download(t, start=start_date, end=end_date, progress=False)
+                if df_peer.empty:
+                    break
+                if isinstance(df_peer.columns, pd.MultiIndex):
+                    df_peer.columns = [col[0] for col in df_peer.columns]
+                results[t] = df_peer.sort_index()
+                
+                # 休眠一小段時間以避免短時間內發送過多請求
+                time.sleep(0.5)
+                break
+            except Exception as e:
+                err_str = str(e)
+                if "Too Many Requests" in err_str or "Rate limited" in err_str or "429" in err_str:
+                    time.sleep(2 ** attempt)
+                    continue
+                else:
+                    break
     return results
 
 # 對於單一因子模式，自動執行最佳參數網格搜尋
