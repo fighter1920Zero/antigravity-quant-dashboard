@@ -1994,8 +1994,34 @@ def plot_monthly_returns(net_returns):
     return fig
 
 # ==========================================================
-# 5. 資料快取下載
+# 5. 資料快取下載與 API 備援機制
 # ==========================================
+def fetch_yahoo_fundamentals_fallback(ticker):
+    """Directly fetch fundamentals from Yahoo's hidden query2 API if yfinance fails."""
+    import requests
+    import random
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5"
+    ]
+    url = f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules=defaultKeyStatistics,financialData,summaryDetail"
+    try:
+        r = requests.get(url, headers={"User-Agent": random.choice(user_agents)}, timeout=5)
+        if r.status_code == 200:
+            res = r.json().get("quoteSummary", {}).get("result", [])
+            if res:
+                r_data = res[0]
+                return {
+                    "trailingPE": r_data.get("summaryDetail", {}).get("trailingPE", {}).get("raw"),
+                    "priceToBook": r_data.get("defaultKeyStatistics", {}).get("priceToBook", {}).get("raw"),
+                    "returnOnEquity": r_data.get("financialData", {}).get("returnOnEquity", {}).get("raw"),
+                    "grossMargins": r_data.get("financialData", {}).get("grossMargins", {}).get("raw"),
+                    "inventoryTurnover": r_data.get("defaultKeyStatistics", {}).get("inventoryTurnover", {}).get("raw")
+                }
+    except Exception:
+        pass
+    return {}
+
 @st.cache_data(ttl=3600)
 def fetch_stock_data(ticker, start_date, end_date, max_retries=3):
     import time
@@ -2041,15 +2067,23 @@ def fetch_stock_data(ticker, start_date, end_date, max_retries=3):
         
     df = df.sort_index()
     
-    # 2. 抓取基本面資訊 (如果失敗，不中斷主流程，允許回傳空字典)
+    # 2. 抓取基本面資訊 (導入強固的備援機制)
     info = {}
     for attempt in range(2):
         try:
             t = yf.Ticker(ticker, session=session)
             info = t.info
+            # 檢查是否為空，或缺乏關鍵數據
+            if not info or ('trailingPE' not in info and 'priceToBook' not in info):
+                fallback_info = fetch_yahoo_fundamentals_fallback(ticker)
+                if fallback_info:
+                    info.update(fallback_info)
             break
-        except Exception as e:
+        except Exception:
             time.sleep(1.5)
+            if attempt == 1:
+                # 最後一次重試失敗，完全改用備用爬蟲
+                info = fetch_yahoo_fundamentals_fallback(ticker)
             continue
             
     return df, info, None
