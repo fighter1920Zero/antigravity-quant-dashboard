@@ -2442,10 +2442,11 @@ with st.sidebar.expander("🔍 挑選個股（市場/類股選單）", expanded=
     sb_selected = st.selectbox("選擇個股", sb_stk_labels, key="sb_stk")
     if st.button("✅ 套用此個股代碼", use_container_width=True):
         selected_code = sb_selected.split()[0]
-        st.session_state['ticker'] = selected_code
+        st.session_state['ticker'] = selected_code.upper()
         st.rerun()
 
-ticker = st.sidebar.text_input("股票代碼（台股加 .TW）", value=def_ticker, key="ticker")
+ticker_input = st.sidebar.text_input("股票代碼（台股加 .TW）", value=def_ticker, key="ticker")
+ticker = ticker_input.strip().upper()
 start_date = st.sidebar.date_input("開始日期", value=def_start, key="start_date")
 end_date = st.sidebar.date_input("結束日期", value=def_end, key="end_date")
 
@@ -2810,7 +2811,7 @@ if mode == "單一因子" and single_factor not in ["P/E Ratio", "P/B Ratio", "R
 # ==========================================
 def run_sim_on_df(df, sim_params, transaction_fee=0.0015):
     """Replay a saved simulation's strategy on a different stock DataFrame."""
-    fund_dummy = {k: None for k in ['P/E Ratio','P/B Ratio','ROE','Gross Margin','Inventory Turnover']}
+    fund_dummy = {}
     p = sim_params.get('ind_params', {})
     mode_s = sim_params.get('mode', '單一因子')
     sigs = calc_all_signals(df, fund_dummy, p=p)
@@ -2855,13 +2856,8 @@ if err:
     st.error(err)
     st.stop()
 
-# 提取基本面
-fundamentals = extract_fundamental_info(info)
-
-# 檢查缺失基本面數值
-missing_fundamentals = [k for k, v in fundamentals.items() if v is None or pd.isna(v)]
-if missing_fundamentals:
-    st.warning(f"⚠️ 網路資料抓取不齊全，下列基本面數值缺失，對應的因子判定將不受影響： {', '.join(missing_fundamentals)}")
+# 技術指標不再需要基本面字典
+fundamentals = {}
 
 # 模擬計算與資料準備
 if df is not None:
