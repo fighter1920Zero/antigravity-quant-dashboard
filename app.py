@@ -1867,6 +1867,7 @@ DEFAULT_PROFILE = {
     "recommended_factors": ["MA Cross (均線交叉)", "MACD (平滑異同移動平均線)", "RSI (相對強弱指標)", "Bollinger Bands (布林通道)", "Volume Surge (爆量突破)"],
     "not_recommended_factors": ["Williams %R (威廉指標)", "CCI (商品通道指數)", "Stochastic RSI (隨機 RSI)", "ADX (平均趨向指數)", "Elder Ray (多空力道)"],
     "outlook": "受惠數位轉型與智慧化需求，{company_name}營運將維持穩健，需觀察全球供應鏈庫存調整進度。"
+}
 
 def fetch_twse_fundamentals(ticker):
     """
