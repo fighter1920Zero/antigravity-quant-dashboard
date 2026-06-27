@@ -17,6 +17,10 @@ factors_list = [
     "OBV", "MFI", "CMF", "Volume Surge",
     # ── 趨勢強度 & 動能 (Strength & Momentum) ──
     "ADX", "Price ROC", "Elder Ray",
+    # ── 基本面指標 (Fundamental) ──
+    "F_PE", "F_PB", "F_EV_EBITDA", "F_DivYield",
+    "F_RevenueGrowth", "F_ProfitMargin", "F_DebtEquity",
+    "F_CurrentRatio", "F_ROA", "F_Beta",
 ]
 
 FACTOR_DISPLAY = {
@@ -40,7 +44,23 @@ FACTOR_DISPLAY = {
     "ADX":              "ADX 平均趨向指數 【技術面】",
     "Price ROC":        "Price ROC 價格動能 【技術面】",
     "Elder Ray":        "Elder Ray 多空力道指標 【技術面】",
+    # 基本面指標
+    "F_PE":             "P/E 本益比 【基本面】",
+    "F_PB":             "P/B 股價淨值比 【基本面】",
+    "F_EV_EBITDA":      "EV/EBITDA 企業價值倍數 【基本面】",
+    "F_DivYield":       "Dividend Yield 現金殖利率 【基本面】",
+    "F_RevenueGrowth":  "Revenue Growth 營收成長率 【基本面】",
+    "F_ProfitMargin":   "Profit Margin 淨利率 【基本面】",
+    "F_DebtEquity":     "Debt/Equity 負債比率 【基本面】",
+    "F_CurrentRatio":   "Current Ratio 流動比率 【基本面】",
+    "F_ROA":            "ROA 資產報酬率 【基本面】",
+    "F_Beta":           "Beta 貝塔係數 【基本面/風險】",
 }
+
+# 基本面因子集合 (用於判斷是否為基本面因子)
+FUNDAMENTAL_FACTORS = {"F_PE", "F_PB", "F_EV_EBITDA", "F_DivYield",
+                        "F_RevenueGrowth", "F_ProfitMargin", "F_DebtEquity",
+                        "F_CurrentRatio", "F_ROA", "F_Beta"}
 
 # 同業標的資料庫 (市場 → 產業 → {代號: 公司名})
 PEER_DB = {
@@ -1690,8 +1710,97 @@ def calc_all_signals(df, fundamentals, p=None):
     # 20. Elder Ray
     elder_p = p.get('elder_period', 13)
     signals['Elder Ray'] = calc_elder_ray(df, elder_p)
-    
+
+    # ==========================================
+    # 21-30. 基本面指標訊號 (從 fundamentals dict 讀取)
+    # ==========================================
+    def _flat_signal(val, buy_cond):
+        """產生全序列相同值的 Series，1=買入，-1=賣出，0=無訊號"""
+        v = 1.0 if buy_cond else -1.0
+        return pd.Series(v if val is not None else 0.0, index=df.index)
+
+    # 21. P/E 本益比：低於門檻 → 買入
+    pe_thresh = p.get('f_pe_thresh', 20.0)
+    pe_val = fundamentals.get('trailingPE')
+    if pe_val and pe_val > 0:
+        signals['F_PE'] = _flat_signal(pe_val, pe_val < pe_thresh)
+    else:
+        signals['F_PE'] = pd.Series(0.0, index=df.index)
+
+    # 22. P/B 股價淨值比：低於門檻 → 買入
+    pb_thresh = p.get('f_pb_thresh', 2.5)
+    pb_val = fundamentals.get('priceToBook')
+    if pb_val and pb_val > 0:
+        signals['F_PB'] = _flat_signal(pb_val, pb_val < pb_thresh)
+    else:
+        signals['F_PB'] = pd.Series(0.0, index=df.index)
+
+    # 23. EV/EBITDA：低於門檻 → 買入
+    ev_thresh = p.get('f_ev_thresh', 15.0)
+    ev_val = fundamentals.get('enterpriseToEbitda')
+    if ev_val and ev_val > 0:
+        signals['F_EV_EBITDA'] = _flat_signal(ev_val, ev_val < ev_thresh)
+    else:
+        signals['F_EV_EBITDA'] = pd.Series(0.0, index=df.index)
+
+    # 24. 殖利率：高於門檻 → 買入
+    dy_thresh = p.get('f_dy_thresh', 2.0)
+    dy_val = fundamentals.get('dividendYield')
+    if dy_val and dy_val > 0:
+        signals['F_DivYield'] = _flat_signal(dy_val, dy_val * 100 >= dy_thresh)
+    else:
+        signals['F_DivYield'] = pd.Series(0.0, index=df.index)
+
+    # 25. 營收成長率：高於門檻 → 買入
+    rg_thresh = p.get('f_rg_thresh', 5.0)
+    rg_val = fundamentals.get('revenueGrowth')
+    if rg_val is not None:
+        signals['F_RevenueGrowth'] = _flat_signal(rg_val, rg_val * 100 >= rg_thresh)
+    else:
+        signals['F_RevenueGrowth'] = pd.Series(0.0, index=df.index)
+
+    # 26. 淨利率：高於門檻 → 買入
+    pm_thresh = p.get('f_pm_thresh', 10.0)
+    pm_val = fundamentals.get('profitMargins')
+    if pm_val is not None:
+        signals['F_ProfitMargin'] = _flat_signal(pm_val, pm_val * 100 >= pm_thresh)
+    else:
+        signals['F_ProfitMargin'] = pd.Series(0.0, index=df.index)
+
+    # 27. 負債比率：低於門檻 → 買入（財務健康）
+    de_thresh = p.get('f_de_thresh', 1.0)
+    de_val = fundamentals.get('debtToEquity')
+    if de_val is not None and de_val >= 0:
+        signals['F_DebtEquity'] = _flat_signal(de_val, de_val < de_thresh * 100)
+    else:
+        signals['F_DebtEquity'] = pd.Series(0.0, index=df.index)
+
+    # 28. 流動比率：高於門檻 → 買入（短期償債能力強）
+    cr_thresh = p.get('f_cr_thresh', 1.5)
+    cr_val = fundamentals.get('currentRatio')
+    if cr_val and cr_val > 0:
+        signals['F_CurrentRatio'] = _flat_signal(cr_val, cr_val >= cr_thresh)
+    else:
+        signals['F_CurrentRatio'] = pd.Series(0.0, index=df.index)
+
+    # 29. ROA 資產報酬率：高於門檻 → 買入
+    roa_thresh = p.get('f_roa_thresh', 5.0)
+    roa_val = fundamentals.get('returnOnAssets')
+    if roa_val is not None:
+        signals['F_ROA'] = _flat_signal(roa_val, roa_val * 100 >= roa_thresh)
+    else:
+        signals['F_ROA'] = pd.Series(0.0, index=df.index)
+
+    # 30. Beta：純展示，低 Beta (<1) → 相對穩健 → 買入
+    beta_thresh = p.get('f_beta_thresh', 1.2)
+    beta_val = fundamentals.get('beta')
+    if beta_val is not None:
+        signals['F_Beta'] = _flat_signal(beta_val, beta_val < beta_thresh)
+    else:
+        signals['F_Beta'] = pd.Series(0.0, index=df.index)
+
     return signals
+
 
 def run_backtest(df, positions, transaction_fee=0.0015, initial_capital=100000):
     close = df['Close']
@@ -2255,7 +2364,131 @@ def render_stock_industry_guidelines(ticker, info):
     )
 
 # ==========================================
-# 4.5. 視覺化繪圖與 KPI 渲染函數
+# 4.5. 基本面數據卡片渲染函數
+# ==========================================
+def render_fundamentals_panel(info: dict, ticker: str):
+    """
+    顯示個股的基本面數據儀表板卡片。
+    從 yfinance info dict 中提取並以精美卡片形式呈現。
+    """
+    if not info:
+        st.info("⚠️ 無法取得基本面資料（可能為非上市股票或數據尚未更新）")
+        return
+
+    def _fmt(val, fmt=".2f", suffix="", scale=1.0, na="N/A"):
+        try:
+            if val is None or val != val:
+                return na
+            return f"{float(val) * scale:{fmt}}{suffix}"
+        except Exception:
+            return na
+
+    # 指標擷取
+    pe   = info.get("trailingPE")
+    fpe  = info.get("forwardPE")
+    pb   = info.get("priceToBook")
+    ev   = info.get("enterpriseToEbitda")
+    dy   = info.get("dividendYield")
+    rg   = info.get("revenueGrowth")
+    pm   = info.get("profitMargins")
+    de   = info.get("debtToEquity")
+    cr   = info.get("currentRatio")
+    roa  = info.get("returnOnAssets")
+    roe  = info.get("returnOnEquity")
+    beta = info.get("beta")
+    mktcap = info.get("marketCap")
+    sector = info.get("sector", "")
+    industry = info.get("industry", "")
+    fiftyTwoHigh = info.get("fiftyTwoWeekHigh")
+    fiftyTwoLow  = info.get("fiftyTwoWeekLow")
+    curPrice     = info.get("currentPrice") or info.get("regularMarketPrice")
+
+    # 顯示
+    st.markdown("### 📊 個股基本面數據")
+
+    # ── 市場概況一行 ──────────────────────────────────
+    meta_cols = st.columns(4)
+    with meta_cols[0]:
+        mc_str = "N/A"
+        if mktcap:
+            if mktcap >= 1e12:
+                mc_str = f"${mktcap/1e12:.2f} T"
+            elif mktcap >= 1e9:
+                mc_str = f"${mktcap/1e9:.2f} B"
+            else:
+                mc_str = f"${mktcap/1e6:.0f} M"
+        st.metric("市值", mc_str)
+    with meta_cols[1]:
+        st.metric("產業", industry or sector or "N/A")
+    with meta_cols[2]:
+        rng = f"{_fmt(fiftyTwoLow, '.2f')} ~ {_fmt(fiftyTwoHigh, '.2f')}"
+        st.metric("52週高低點", rng)
+    with meta_cols[3]:
+        st.metric("現價", _fmt(curPrice, '.2f'))
+
+    st.markdown("---")
+
+    # ── 估值指標 ──────────────────────────────────────
+    st.markdown("**📐 估值指標**")
+    val_cols = st.columns(4)
+    items_val = [
+        ("本益比 (P/E TTM)", _fmt(pe, ".1f", "x"), pe and pe < 20),
+        ("預期本益比 (Fwd P/E)", _fmt(fpe, ".1f", "x"), fpe and fpe < 18),
+        ("股價淨值比 (P/B)", _fmt(pb, ".2f", "x"), pb and pb < 2.5),
+        ("EV/EBITDA", _fmt(ev, ".1f", "x"), ev and ev < 15),
+    ]
+    for i, (label, val, is_good) in enumerate(items_val):
+        with val_cols[i]:
+            color = "#00e676" if is_good else ("#ff6d00" if val != "N/A" else "#8a99ad")
+            st.markdown(
+                f'<div style="background:rgba(17,25,40,0.6);border-radius:8px;padding:12px 14px;'
+                f'border-left:4px solid {color};margin-bottom:8px;">'
+                f'<div style="font-size:0.78rem;color:#8a99ad;margin-bottom:4px;">{label}</div>'
+                f'<div style="font-size:1.3rem;font-weight:700;color:{color};">{val}</div>'
+                f'</div>', unsafe_allow_html=True)
+
+    # ── 獲利指標 ──────────────────────────────────────
+    st.markdown("**💰 獲利能力**")
+    profit_cols = st.columns(4)
+    items_profit = [
+        ("殖利率", _fmt(dy, ".2f", "%", 100.0), dy and dy * 100 >= 2.0),
+        ("淨利率", _fmt(pm, ".1f", "%", 100.0), pm and pm * 100 >= 10.0),
+        ("ROE 股東權益報酬率", _fmt(roe, ".1f", "%", 100.0), roe and roe * 100 >= 10.0),
+        ("ROA 資產報酬率", _fmt(roa, ".1f", "%", 100.0), roa and roa * 100 >= 5.0),
+    ]
+    for i, (label, val, is_good) in enumerate(items_profit):
+        with profit_cols[i]:
+            color = "#00e676" if is_good else ("#ff6d00" if val != "N/A" else "#8a99ad")
+            st.markdown(
+                f'<div style="background:rgba(17,25,40,0.6);border-radius:8px;padding:12px 14px;'
+                f'border-left:4px solid {color};margin-bottom:8px;">'
+                f'<div style="font-size:0.78rem;color:#8a99ad;margin-bottom:4px;">{label}</div>'
+                f'<div style="font-size:1.3rem;font-weight:700;color:{color};">{val}</div>'
+                f'</div>', unsafe_allow_html=True)
+
+    # ── 財務健康 ──────────────────────────────────────
+    st.markdown("**🏦 財務健康**")
+    fin_cols = st.columns(4)
+    items_fin = [
+        ("營收成長率 YoY", _fmt(rg, ".1f", "%", 100.0), rg and rg * 100 >= 5.0),
+        ("負債/權益比 (D/E)", _fmt(de, ".1f", ""), de is not None and de < 100),
+        ("流動比率", _fmt(cr, ".2f", "x"), cr and cr >= 1.5),
+        ("Beta 係數", _fmt(beta, ".2f", ""), beta is not None and beta < 1.2),
+    ]
+    for i, (label, val, is_good) in enumerate(items_fin):
+        with fin_cols[i]:
+            color = "#00e676" if is_good else ("#ff6d00" if val != "N/A" else "#8a99ad")
+            st.markdown(
+                f'<div style="background:rgba(17,25,40,0.6);border-radius:8px;padding:12px 14px;'
+                f'border-left:4px solid {color};margin-bottom:8px;">'
+                f'<div style="font-size:0.78rem;color:#8a99ad;margin-bottom:4px;">{label}</div>'
+                f'<div style="font-size:1.3rem;font-weight:700;color:{color};">{val}</div>'
+                f'</div>', unsafe_allow_html=True)
+
+    st.caption("🟢 綠色 = 符合良好標準 ｜ 🟠 橙色 = 需要留意 ｜ ⚫ 灰色 = 無資料")
+
+# ==========================================
+# 4.6. 視覺化繪圖與 KPI 渲染函數
 # ==========================================
 def render_kpi_card(title, value, delta_str, is_positive):
     delta_class = "delta-positive" if is_positive else "delta-negative"
@@ -2657,6 +2890,53 @@ with st.sidebar.expander("🔧 因子參數細部調整", expanded=False):
     else:
         p_elder_period = 13
 
+    # ── 基本面因子門溻參數 ──────────────────────────────────
+    active_fund_factors = [f for f in FUNDAMENTAL_FACTORS if f in active_tech_factors]
+    if active_fund_factors:
+        st.markdown("---")
+        st.markdown("📄 **基本面指標閂值設定**")
+        st.caption("基本面因子根據實時資料產生全期間一致訊號，符合門溻為買入，不符則為準餈1支。")
+    if "F_PE" in active_tech_factors:
+        p_f_pe_thresh = st.slider("P/E 頂多始買入門溻", 5, 60, value=st.session_state.get('p_f_pe_thresh', 20), key="p_f_pe_thresh")
+    else:
+        p_f_pe_thresh = 20
+    if "F_PB" in active_tech_factors:
+        p_f_pb_thresh = st.slider("P/B 頂多始買入門溻", 0.5, 6.0, value=float(st.session_state.get('p_f_pb_thresh', 2.5)), step=0.5, key="p_f_pb_thresh")
+    else:
+        p_f_pb_thresh = 2.5
+    if "F_EV_EBITDA" in active_tech_factors:
+        p_f_ev_thresh = st.slider("EV/EBITDA 頂多始買入門溻", 5, 40, value=st.session_state.get('p_f_ev_thresh', 15), key="p_f_ev_thresh")
+    else:
+        p_f_ev_thresh = 15
+    if "F_DivYield" in active_tech_factors:
+        p_f_dy_thresh = st.slider("殖利率 至少 (%)", 0.5, 8.0, value=float(st.session_state.get('p_f_dy_thresh', 2.0)), step=0.5, key="p_f_dy_thresh")
+    else:
+        p_f_dy_thresh = 2.0
+    if "F_RevenueGrowth" in active_tech_factors:
+        p_f_rg_thresh = st.slider("營收成長率 至少 (%)", 0, 30, value=st.session_state.get('p_f_rg_thresh', 5), key="p_f_rg_thresh")
+    else:
+        p_f_rg_thresh = 5
+    if "F_ProfitMargin" in active_tech_factors:
+        p_f_pm_thresh = st.slider("淨利率 至少 (%)", 1, 30, value=st.session_state.get('p_f_pm_thresh', 10), key="p_f_pm_thresh")
+    else:
+        p_f_pm_thresh = 10
+    if "F_DebtEquity" in active_tech_factors:
+        p_f_de_thresh = st.slider("負債/權益比 上限", 0.3, 3.0, value=float(st.session_state.get('p_f_de_thresh', 1.0)), step=0.1, key="p_f_de_thresh")
+    else:
+        p_f_de_thresh = 1.0
+    if "F_CurrentRatio" in active_tech_factors:
+        p_f_cr_thresh = st.slider("流動比率 至少", 1.0, 3.0, value=float(st.session_state.get('p_f_cr_thresh', 1.5)), step=0.1, key="p_f_cr_thresh")
+    else:
+        p_f_cr_thresh = 1.5
+    if "F_ROA" in active_tech_factors:
+        p_f_roa_thresh = st.slider("ROA 至少 (%)", 1, 20, value=st.session_state.get('p_f_roa_thresh', 5), key="p_f_roa_thresh")
+    else:
+        p_f_roa_thresh = 5
+    if "F_Beta" in active_tech_factors:
+        p_f_beta_thresh = st.slider("Beta 上限 (小於此值為買)", 0.5, 2.5, value=float(st.session_state.get('p_f_beta_thresh', 1.2)), step=0.1, key="p_f_beta_thresh")
+    else:
+        p_f_beta_thresh = 1.2
+
 # 建立參數包傳入計算函數
 indicator_params = {
     'ma_fast': p_ma_fast, 'ma_slow': p_ma_slow,
@@ -2679,6 +2959,17 @@ indicator_params = {
     'vs_period': p_vs_period, 'vs_mult': p_vs_mult,
     'roc_period': p_roc_period, 'roc_thresh': p_roc_thresh,
     'elder_period': p_elder_period,
+    # 基本面門溻參數
+    'f_pe_thresh': p_f_pe_thresh,
+    'f_pb_thresh': p_f_pb_thresh,
+    'f_ev_thresh': p_f_ev_thresh,
+    'f_dy_thresh': p_f_dy_thresh,
+    'f_rg_thresh': p_f_rg_thresh,
+    'f_pm_thresh': p_f_pm_thresh,
+    'f_de_thresh': p_f_de_thresh,
+    'f_cr_thresh': p_f_cr_thresh,
+    'f_roa_thresh': p_f_roa_thresh,
+    'f_beta_thresh': p_f_beta_thresh,
 }
 
 # ==========================================
@@ -2785,8 +3076,8 @@ def fetch_peer_stock_data(ticker_list, start_date, end_date):
         time.sleep(0.8)
     return results
 
-# 對於單一因子模式，自動執行最佳參數網格搜尋
-if mode == "單一因子" and single_factor not in ["P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"]:
+# 對於單一因子模式，自動執行最佳參數網格搜尋（基本面因子跳過）
+if mode == "單一因子" and single_factor not in FUNDAMENTAL_FACTORS:
     # 編製缓存鍵値：個股+日期+因子組合沒變化就不重跡運算
     opt_key = f"opt_{ticker}_{start_date}_{end_date}_{single_factor}"
     if opt_key not in st.session_state:
@@ -2856,8 +3147,9 @@ if err:
     st.error(err)
     st.stop()
 
-# 技術指標不再需要基本面字典
-fundamentals = {}
+# 將 yfinance info 傳入基本面計算
+# debtToEquity 在 yfinance 是已除以 100 的小數形式（比如 0.45），但我們的計算是與 100 相乘後再比較
+fundamentals = info if info else {}
 
 # 模擬計算與資料準備
 if df is not None:
@@ -2965,11 +3257,13 @@ else:
 # ==========================================
 # 9. 主要 Tabs 分頁與繪圖
 # ==========================================
-tab1, tab2, tab3 = st.tabs(["📊 單一回測分析", "⚖️ 策略比對對照", "🔍 參數最佳化與同業比對"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 單一回測分析", "⚖️ 策略比對對照", "🔍 參數最佳化與同業比對", "🏭 產業總覽看板"])
 
 # ----------------- Tab 1: 單一回測 -----------------
 with tab1:
-    # （已移除基本面資料表格顯示區塊）
+    # 基本面數據嵌入式展開區塊
+    with st.expander(f"📊 {ticker} 基本面數據總覽", expanded=False):
+        render_fundamentals_panel(info, ticker)
 
     # 策略決策規則描述
     st.markdown("### 📝 當前策略決策規則")
@@ -3014,6 +3308,21 @@ with tab1:
             desc = f"當價格變動率 ROC({p_roc_period}) 大於動能門檻 {p_roc_thresh}% 時買入做多；低於 -{p_roc_thresh}% 時平倉。"
         elif single_factor == "Elder Ray":
             desc = f"當多頭力道 (Bull Power) 與空頭力道 (Bear Power) 雙雙大於 0 時買入做多；雙雙小於 0 時平倉。"
+        elif single_factor in FUNDAMENTAL_FACTORS:
+            fund_label = FACTOR_DISPLAY.get(single_factor, single_factor)
+            fund_descs = {
+                "F_PE":            f"當本益比(P/E) 低於設定門檻 {p_f_pe_thresh} 倍時，視為具備估值吸引力，持有做多；反之不持有。",
+                "F_PB":            f"當股價淨值比(P/B) 低於設定門檻 {p_f_pb_thresh} 倍時，視為低估值，持有做多；反之不持有。",
+                "F_EV_EBITDA":     f"當企業價值倍數(EV/EBITDA) 低於設定門檻 {p_f_ev_thresh} 倍時，視為物超所值，持有做多；反之不持有。",
+                "F_DivYield":      f"當現金殖利率達到 {p_f_dy_thresh}% 以上時，視為高配息標的，持有做多；反之不持有。",
+                "F_RevenueGrowth": f"當最新一季營收年增率達到 {p_f_rg_thresh}% 以上時，視為成長強勁，持有做多；反之不持有。",
+                "F_ProfitMargin":  f"當淨利率達到 {p_f_pm_thresh}% 以上時，視為獲利能力良好，持有做多；反之不持有。",
+                "F_DebtEquity":    f"當負債/權益比低於 {p_f_de_thresh:.1f} 時，視為財務槓桿健康，持有做多；反之不持有。",
+                "F_CurrentRatio":  f"當流動比率達到 {p_f_cr_thresh:.1f} 以上時，視為短期償債能力足夠，持有做多；反之不持有。",
+                "F_ROA":           f"當資產報酬率(ROA) 達到 {p_f_roa_thresh}% 以上時，視為資產效率良好，持有做多；反之不持有。",
+                "F_Beta":          f"當 Beta 係數低於 {p_f_beta_thresh:.1f} 時，視為相對低波動標的，持有做多；反之不持有。",
+            }
+            desc = fund_descs.get(single_factor, "根據實時基本面數值與門檻設定產生靜態訊號。")
         else:
             desc = f"技術因子訊號判定。"
             
@@ -3103,7 +3412,7 @@ with tab1:
     st.plotly_chart(plot_monthly_returns(res['net_returns']), use_container_width=True)
 
     # 買賣導明明細表
-    if mode == "單一因子" and single_factor not in ["P/E Ratio", "P/B Ratio", "ROE", "Gross Margin", "Inventory Turnover"]:
+    if mode == "單一因子" and single_factor not in FUNDAMENTAL_FACTORS:
         with st.expander("📋 最佳參數之實際交易明細", expanded=True):
             # 取得用於交易日誌的指標專屬數列
             ind_series = None
@@ -3399,3 +3708,192 @@ with tab3:
                             st.dataframe(styled_t3, use_container_width=True)
             else:
                 st.info("完成上方策略與標的的選擇後，點擊「執行同業策略比對」開始運算。")
+
+# ----------------- Tab 4: 產業總覽看板 -----------------
+with tab4:
+    st.markdown("### 🏭 產業總覽看板")
+    st.write("選擇一個產業，一次查看所有成分股的基本面數據比較與股價走勢。")
+
+    # 選擇市場與產業
+    t4_col1, t4_col2 = st.columns(2)
+    with t4_col1:
+        t4_mkt = st.selectbox("市場", ["台股", "美股"], key="t4_mkt")
+    with t4_col2:
+        t4_sec_list = list(PEER_DB.get(t4_mkt, {}).keys())
+        t4_sec = st.selectbox("產業類別", t4_sec_list, key="t4_sec")
+
+    t4_tickers = PEER_DB.get(t4_mkt, {}).get(t4_sec, {})
+    t4_ticker_list = list(t4_tickers.keys())
+
+    if not t4_ticker_list:
+        st.warning("此產業暫無個股資料。")
+    else:
+        st.markdown(f"**{t4_sec}** 共 **{len(t4_ticker_list)}** 支成分股")
+
+        if st.button("🔍 載入產業基本面資料", key="t4_load", use_container_width=False):
+            @st.cache_data(ttl=1800)
+            def fetch_industry_fundamentals(ticker_list):
+                """批量取得各個股的基本面數據"""
+                import time
+                rows = []
+                for t in ticker_list:
+                    try:
+                        yf_info = yf.Ticker(t).info
+                        mktcap = yf_info.get("marketCap")
+                        if mktcap:
+                            if mktcap >= 1e12:
+                                mc_str = f"{mktcap/1e12:.2f}T"
+                            elif mktcap >= 1e9:
+                                mc_str = f"{mktcap/1e9:.2f}B"
+                            else:
+                                mc_str = f"{mktcap/1e6:.0f}M"
+                        else:
+                            mc_str = "N/A"
+
+                        def _safe(val, scale=1.0, fmt=".2f"):
+                            try:
+                                if val is None or (isinstance(val, float) and val != val):
+                                    return None
+                                return round(float(val) * scale, 2)
+                            except Exception:
+                                return None
+
+                        rows.append({
+                            "代號": t,
+                            "名稱": t4_tickers.get(t, t),
+                            "市值": mc_str,
+                            "現價": _safe(yf_info.get("currentPrice") or yf_info.get("regularMarketPrice")),
+                            "52週高": _safe(yf_info.get("fiftyTwoWeekHigh")),
+                            "52週低": _safe(yf_info.get("fiftyTwoWeekLow")),
+                            "P/E": _safe(yf_info.get("trailingPE")),
+                            "P/B": _safe(yf_info.get("priceToBook")),
+                            "EV/EBITDA": _safe(yf_info.get("enterpriseToEbitda")),
+                            "殖利率(%)": _safe(yf_info.get("dividendYield"), scale=100.0, fmt=".2f"),
+                            "淨利率(%)": _safe(yf_info.get("profitMargins"), scale=100.0, fmt=".1f"),
+                            "ROE(%)": _safe(yf_info.get("returnOnEquity"), scale=100.0, fmt=".1f"),
+                            "ROA(%)": _safe(yf_info.get("returnOnAssets"), scale=100.0, fmt=".1f"),
+                            "營收成長(%)": _safe(yf_info.get("revenueGrowth"), scale=100.0, fmt=".1f"),
+                            "D/E": _safe(yf_info.get("debtToEquity")),
+                            "流動比": _safe(yf_info.get("currentRatio")),
+                            "Beta": _safe(yf_info.get("beta")),
+                        })
+                        time.sleep(0.5)
+                    except Exception:
+                        rows.append({"代號": t, "名稱": t4_tickers.get(t, t)})
+                return pd.DataFrame(rows)
+
+            with st.spinner(f"正在批量下載 {t4_sec} 共 {len(t4_ticker_list)} 支個股的基本面數據，請稍候..."):
+                t4_df = fetch_industry_fundamentals(tuple(t4_ticker_list))
+
+            if t4_df.empty:
+                st.error("資料下載失敗，請確認網路連線或稍後再試。")
+            else:
+                st.session_state[f"t4_data_{t4_mkt}_{t4_sec}"] = t4_df
+
+        # 顯示已快取的資料
+        cached_key = f"t4_data_{t4_mkt}_{t4_sec}"
+        if cached_key in st.session_state:
+            t4_df = st.session_state[cached_key]
+            st.success(f"✅ 已載入 {len(t4_df)} 筆個股資料")
+
+            # ── 基本面比較表格 ──────────────────────────────────
+            st.markdown("#### 📋 產業個股基本面比較表")
+            st.caption("🟢 數值即時來自 yfinance，N/A 表示資料未提供。點擊欄位標題可排序。")
+
+            # 格式化數字欄位
+            numeric_cols = ["P/E", "P/B", "EV/EBITDA", "殖利率(%)", "淨利率(%)",
+                            "ROE(%)", "ROA(%)", "營收成長(%)", "D/E", "流動比", "Beta",
+                            "現價", "52週高", "52週低"]
+
+            def _style_cell(val):
+                if val is None or (isinstance(val, float) and val != val):
+                    return "color: #8a99ad"
+                return ""
+
+            display_df = t4_df.set_index("代號")
+            try:
+                styled_t4 = display_df.style.map(_style_cell)
+                st.dataframe(styled_t4, use_container_width=True, height=400)
+            except Exception:
+                st.dataframe(display_df, use_container_width=True, height=400)
+
+            # ── 雷達圖（多維度指標比較）──────────────────────────
+            st.markdown("#### 🕸️ 各股多維度基本面雷達圖")
+            radar_metrics = ["P/E", "P/B", "ROE(%)", "ROA(%)", "殖利率(%)"]
+            radar_available = [c for c in radar_metrics if c in t4_df.columns]
+
+            if len(radar_available) >= 3:
+                # 標準化到 0-100
+                radar_data = t4_df[["名稱"] + radar_available].dropna(subset=radar_available)
+                if not radar_data.empty:
+                    fig_radar = go.Figure()
+                    colors = ["#00e5ff", "#7c4dff", "#00e676", "#ff6d00", "#ff4081",
+                              "#eeff41", "#64ffda", "#ffab40"]
+                    for i, (_, row) in enumerate(radar_data.iterrows()):
+                        vals = []
+                        for m in radar_available:
+                            try:
+                                col_data = radar_data[m].dropna()
+                                cmin, cmax = col_data.min(), col_data.max()
+                                normed = (float(row[m]) - cmin) / (cmax - cmin + 1e-9) * 100
+                                vals.append(round(normed, 1))
+                            except Exception:
+                                vals.append(0)
+                        fig_radar.add_trace(go.Scatterpolar(
+                            r=vals + [vals[0]],
+                            theta=radar_available + [radar_available[0]],
+                            fill='toself',
+                            name=row["名稱"],
+                            opacity=0.7,
+                            line=dict(color=colors[i % len(colors)], width=1.5)
+                        ))
+                    fig_radar.update_layout(
+                        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                        template="plotly_dark",
+                        height=500,
+                        legend=dict(orientation="v", x=1.05),
+                        margin=dict(l=60, r=150, t=40, b=40)
+                    )
+                    st.plotly_chart(fig_radar, use_container_width=True)
+                    st.caption("雷達圖數值為各指標在產業內的相對百分位數（0=最低，100=最高），非原始數值。")
+                else:
+                    st.info("雷達圖需要至少 3 個有效指標數據，目前資料不足。")
+            else:
+                st.info("雷達圖需要 P/E、P/B、ROE、ROA、殖利率等指標，目前資料不足。")
+
+            # ── 個股股價走勢快速預覽 ──────────────────────────────
+            st.markdown("#### 📈 個股走勢快速預覽")
+            t4_preview_cols = st.columns(2)
+            with t4_preview_cols[0]:
+                t4_preview_ticker = st.selectbox(
+                    "選擇預覽個股",
+                    options=t4_ticker_list,
+                    format_func=lambda x: f"{x} {t4_tickers.get(x, '')}",
+                    key="t4_preview_ticker"
+                )
+            with t4_preview_cols[1]:
+                t4_preview_period = st.selectbox("預覽期間", ["3mo", "6mo", "1y", "2y"], index=0, key="t4_preview_period")
+
+            if t4_preview_ticker:
+                try:
+                    _preview_end = datetime.date.today()
+                    _period_map = {"3mo": 90, "6mo": 180, "1y": 365, "2y": 730}
+                    _preview_start = _preview_end - datetime.timedelta(days=_period_map.get(t4_preview_period, 90))
+                    t4_preview_df, _, _ = fetch_stock_data(t4_preview_ticker, _preview_start, _preview_end)
+                    if t4_preview_df is not None and not t4_preview_df.empty:
+                        fig_prev = plot_candlestick(
+                            t4_preview_df,
+                            t4_preview_df['Close'].rolling(20).mean(),
+                            t4_preview_df['Close'].rolling(60).mean()
+                        )
+                        fig_prev.update_layout(
+                            title=f"{t4_preview_ticker} {t4_tickers.get(t4_preview_ticker, '')} — {t4_preview_period} 走勢",
+                            height=450
+                        )
+                        st.plotly_chart(fig_prev, use_container_width=True)
+                    else:
+                        st.warning("無法取得此個股的歷史資料。")
+                except Exception as e:
+                    st.warning(f"預覽圖載入失敗：{e}")
+        else:
+            st.info("👆 點擊「載入產業基本面資料」按鈕以獲取整個產業的基本面數據。")
