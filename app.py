@@ -1747,7 +1747,8 @@ def calc_all_signals(df, fundamentals, p=None):
     dy_thresh = p.get('f_dy_thresh', 2.0)
     dy_val = fundamentals.get('dividendYield')
     if dy_val and dy_val > 0:
-        signals['F_DivYield'] = _flat_signal(dy_val, dy_val * 100 >= dy_thresh)
+        dy_pct = dy_val * 100.0 if dy_val < 1.0 else dy_val
+        signals['F_DivYield'] = _flat_signal(dy_val, dy_pct >= dy_thresh)
     else:
         signals['F_DivYield'] = pd.Series(0.0, index=df.index)
 
@@ -2389,6 +2390,8 @@ def render_fundamentals_panel(info: dict, ticker: str):
     pb   = info.get("priceToBook")
     ev   = info.get("enterpriseToEbitda")
     dy   = info.get("dividendYield")
+    if dy is not None:
+        dy = dy * 0.01 if dy > 1.0 else dy
     rg   = info.get("revenueGrowth")
     pm   = info.get("profitMargins")
     de   = info.get("debtToEquity")
@@ -3704,6 +3707,13 @@ with tab3:
                                 result_df.set_index(['策略','標的'])
                                 .style.map(_color_ret, subset=['策略累積報酬 (%)'])
                                 .map(_color_ret, subset=['Buy & Hold (%)'])
+                                .format({
+                                    '策略累積報酬 (%)': '{:.2f}%',
+                                    'Buy & Hold (%)': '{:.2f}%',
+                                    '夏普值': '{:.2f}',
+                                    '最大回撤 (%)': '{:.2f}%',
+                                    '勝率 (%)': '{:.1f}%'
+                                })
                             )
                             st.dataframe(styled_t3, use_container_width=True)
             else:
@@ -3768,7 +3778,7 @@ with tab4:
                             "P/E": _safe(yf_info.get("trailingPE")),
                             "P/B": _safe(yf_info.get("priceToBook")),
                             "EV/EBITDA": _safe(yf_info.get("enterpriseToEbitda")),
-                            "殖利率(%)": _safe(yf_info.get("dividendYield"), scale=100.0, fmt=".2f"),
+                            "殖利率(%)": (lambda dy: _safe(dy, scale=100.0) if (dy is not None and dy < 1.0) else _safe(dy, scale=1.0))(yf_info.get("dividendYield")),
                             "淨利率(%)": _safe(yf_info.get("profitMargins"), scale=100.0, fmt=".1f"),
                             "ROE(%)": _safe(yf_info.get("returnOnEquity"), scale=100.0, fmt=".1f"),
                             "ROA(%)": _safe(yf_info.get("returnOnAssets"), scale=100.0, fmt=".1f"),
@@ -3812,7 +3822,9 @@ with tab4:
 
             display_df = t4_df.set_index("代號")
             try:
-                styled_t4 = display_df.style.map(_style_cell)
+                float_cols = display_df.select_dtypes(include=['float', 'float64']).columns
+                format_dict = {col: "{:.2f}" for col in float_cols}
+                styled_t4 = display_df.style.map(_style_cell).format(format_dict, na_rep="None")
                 st.dataframe(styled_t4, use_container_width=True, height=400)
             except Exception:
                 st.dataframe(display_df, use_container_width=True, height=400)
